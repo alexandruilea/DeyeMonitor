@@ -1,0 +1,13 @@
+# Deye Inverter EMS Pro - Dependencies
+
+# GUI Framework
+customtkinter>=5.2.0
+
+# Inverter Communication
+pysolarmanv5>=3.0.0
+
+# Smart Plug Control
+python-kasa>=0.6.0
+
+# Environment Configuration
+python-dotenv>=1.0.0
