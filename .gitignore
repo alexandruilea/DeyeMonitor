@@ -22,6 +22,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+Legacy/
 
 # PyInstaller
 *.spec
