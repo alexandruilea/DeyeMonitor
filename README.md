@@ -57,14 +57,14 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 
 ### Environment Variables (.env)
 
-| Variable      | Description                 |
-| ------------- | --------------------------- |
-| `DEYE_IP`     | Deye inverter IP address    |
-| `DEYE_SERIAL` | Deye inverter serial number |
-| `DEYE_PORT`   | Modbus port (default: 8899) |
-| `TAPO_IP`     | Tapo smart plug IP address  |
-| `TAPO_USER`   | Tapo account email          |
-| `TAPO_PASS`   | Tapo account password       |
+| Variable             | Description                 |
+| -------------------- | --------------------------- |
+| `DEYE_IP`            | Deye inverter IP address    |
+| `DEYE_LOGGER_SERIAL` | Deye logger serial number   |
+| `DEYE_PORT`          | Modbus port (default: 8899) |
+| `TAPO_IP`            | Tapo smart plug IP address  |
+| `TAPO_USER`          | Tapo account email          |
+| `TAPO_PASS`          | Tapo account password       |
 
 ### EMS Parameters (in-app configurable)
 
@@ -86,6 +86,32 @@ Run the application:
 ```bash
 python main.py
 ```
+
+## Building Standalone Executable
+
+You can build a standalone Windows executable that doesn't require Python to be installed.
+
+### Prerequisites
+
+```bash
+pip install pyinstaller
+```
+
+### Build
+
+```bash
+pyinstaller build.spec --clean
+```
+
+The executable will be created at `dist/DeyeEMS.exe` (~18 MB).
+
+### Running the Executable
+
+1. Copy `DeyeEMS.exe` from the `dist/` folder to your desired location
+2. Copy your `.env` file to the **same folder** as the executable
+3. Double-click `DeyeEMS.exe` to run
+
+> **Note:** The `.env` file must be in the same directory as the executable for configuration to work.
 
 ## License
 

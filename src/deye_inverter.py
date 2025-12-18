@@ -38,7 +38,7 @@ class DeyeInverter:
             if self._modbus is None:
                 self._modbus = PySolarmanV5(
                     deye_config.ip,
-                    deye_config.serial,
+                    deye_config.logger_serial,
                     port=deye_config.port,
                     auto_reconnect=True
                 )

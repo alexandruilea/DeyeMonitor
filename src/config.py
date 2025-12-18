@@ -4,13 +4,24 @@ Loads hardware settings from .env file and provides default EMS parameters.
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from dotenv import load_dotenv
 
 
+def get_app_path() -> Path:
+    """Get the application path, works both for dev and PyInstaller bundle."""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        return Path(sys.executable).parent
+    else:
+        # Running as script
+        return Path(__file__).parent.parent
+
+
 # Load environment variables from .env file
-_env_path = Path(__file__).parent.parent / ".env"
+_env_path = get_app_path() / ".env"
 load_dotenv(_env_path)
 
 
@@ -18,7 +29,7 @@ load_dotenv(_env_path)
 class DeyeConfig:
     """Deye inverter connection configuration."""
     ip: str = field(default_factory=lambda: os.getenv("DEYE_IP", "192.168.0.122"))
-    serial: int = field(default_factory=lambda: int(os.getenv("DEYE_SERIAL", "3127036880")))
+    logger_serial: int = field(default_factory=lambda: int(os.getenv("DEYE_LOGGER_SERIAL", "3127036880")))
     port: int = field(default_factory=lambda: int(os.getenv("DEYE_PORT", "8899")))
 
 
