@@ -216,12 +216,14 @@ class HeatPumpButton(ctk.CTkButton):
     STATE_OFFLINE = "offline"
     STATE_RUNNING = "running"
     STATE_STANDBY = "standby"
+    STATE_SWITCHING = "switching"
     
     COLORS = {
         STATE_SYNCING: "#3B3B3B",
         STATE_OFFLINE: "#3B3B3B",
         STATE_RUNNING: "#27AE60",
         STATE_STANDBY: "#C0392B",
+        STATE_SWITCHING: "#F39C12",
     }
     
     LABELS = {
@@ -229,6 +231,7 @@ class HeatPumpButton(ctk.CTkButton):
         STATE_OFFLINE: "HP: TAPO OFFLINE",
         STATE_RUNNING: "HEAT PUMP: RUNNING",
         STATE_STANDBY: "HEAT PUMP: STANDBY",
+        STATE_SWITCHING: "HP: SWITCHING...",
     }
     
     def __init__(self, parent, command, **kwargs):
@@ -238,6 +241,7 @@ class HeatPumpButton(ctk.CTkButton):
             command=command,
             font=("Roboto", 20, "bold"),
             height=70,
+            hover=False,
             **kwargs
         )
         self._current_state = self.STATE_SYNCING

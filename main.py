@@ -39,6 +39,9 @@ class DeyeApp(ctk.CTk):
         # Configuration variables
         self._init_config_variables()
         
+        # Track pending outlet state change
+        self._pending_outlet_state = None
+        
         # Setup UI
         self._setup_ui()
         
@@ -106,6 +109,20 @@ class DeyeApp(ctk.CTk):
 
     def _on_hp_toggle(self) -> None:
         """Handle heat pump toggle button press."""
+        # Prevent action if already pending
+        if self._pending_outlet_state is not None:
+            return
+        
+        # Automatically enable manual mode when button is pressed
+        if not self.cfg["manual_mode"].get():
+            self.cfg["manual_mode"].set(True)
+            self._on_manual_toggle()
+        
+        # Set pending state and disable button
+        self._pending_outlet_state = not self.tapo.current_state
+        self.btn_hp.set_state(HeatPumpButton.STATE_SWITCHING)
+        self.btn_hp.configure(state="disabled")
+        
         self.tapo.toggle()
 
     def _get_safe_value(self, var: ctk.StringVar, default: float) -> float:
@@ -165,11 +182,26 @@ class DeyeApp(ctk.CTk):
         
         # Update heat pump button
         if not self.tapo.is_connected:
+            self._pending_outlet_state = None
+            self.btn_hp.configure(state="normal")
             self.btn_hp.set_state(HeatPumpButton.STATE_OFFLINE)
-        elif self.tapo.current_state:
-            self.btn_hp.set_state(HeatPumpButton.STATE_RUNNING)
+        elif self._pending_outlet_state is not None:
+            # Check if state has been confirmed
+            if self.tapo.current_state == self._pending_outlet_state:
+                self._pending_outlet_state = None
+                self.btn_hp.configure(state="normal")
+                # Continue to update with actual state below
+                if self.tapo.current_state:
+                    self.btn_hp.set_state(HeatPumpButton.STATE_RUNNING)
+                else:
+                    self.btn_hp.set_state(HeatPumpButton.STATE_STANDBY)
+            # else: keep showing SWITCHING state
         else:
-            self.btn_hp.set_state(HeatPumpButton.STATE_STANDBY)
+            # Normal state updates when not pending
+            if self.tapo.current_state:
+                self.btn_hp.set_state(HeatPumpButton.STATE_RUNNING)
+            else:
+                self.btn_hp.set_state(HeatPumpButton.STATE_STANDBY)
 
     def _process_logic(self, data: InverterData) -> None:
         """Process EMS logic (called from background thread)."""
