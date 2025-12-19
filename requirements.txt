@@ -7,7 +7,7 @@ customtkinter>=5.2.0
 pysolarmanv5>=3.0.0
 
 # Smart Plug Control
-python-kasa>=0.6.0
+tapo>=0.8.8
 
 # Environment Configuration
 python-dotenv>=1.0.0

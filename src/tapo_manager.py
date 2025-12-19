@@ -1,11 +1,11 @@
 """
-Tapo smart plug manager with async connection handling.
+Tapo smart plug manager with async connection handling using official tapo library.
 """
 
 import asyncio
 import threading
 from typing import Optional
-from kasa import Discover
+from tapo import ApiClient
 
 from src.config import tapo_config
 
@@ -38,27 +38,25 @@ class TapoManager:
             try:
                 # Connect if not connected
                 if self.device is None:
-                    self.device = await Discover.discover_single(
-                        tapo_config.ip,
-                        username=tapo_config.username,
-                        password=tapo_config.password
-                    )
+                    client = ApiClient(tapo_config.username, tapo_config.password)
+                    self.device = await client.p110(tapo_config.ip)
                 
                 # Update device state
-                await self.device.update()
-                self.current_state = self.device.is_on
+                info = await self.device.get_device_info()
+                self.current_state = info.device_on
                 self.is_connected = True
                 
                 # Apply target state if set
                 if self.target_state is not None:
                     if self.target_state != self.current_state:
                         if self.target_state:
-                            await self.device.turn_on()
+                            await self.device.on()
                         else:
-                            await self.device.turn_off()
+                            await self.device.off()
                     self.target_state = None
                     
-            except Exception:
+            except Exception as e:
+                print(f"TAPO Error: {e}")
                 self.is_connected = False
                 self.device = None
                 
