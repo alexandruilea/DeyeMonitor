@@ -60,7 +60,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
     """Settings panel for individual outlet configuration."""
     
     def __init__(self, parent, outlet_name: str, variables: dict, **kwargs):
-        super().__init__(parent, **kwargs)
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
         self.outlet_name = outlet_name
         self.variables = variables
         self.logic_widgets: List[Tuple[ctk.CTkLabel, ctk.CTkEntry]] = []
@@ -72,7 +72,15 @@ class OutletSettingsPanel(ctk.CTkFrame):
             self, text=f"{outlet_name} CONFIGURATION",
             font=("Roboto", 13, "bold"),
             text_color="#3498DB"
-        ).grid(row=0, column=0, columnspan=6, pady=(10, 5))
+        ).grid(row=0, column=0, columnspan=4, pady=(10, 5), sticky="w")
+        
+        # Off-Grid Mode toggle (top right)
+        self.offgrid_switch = ctk.CTkSwitch(
+            self, text="Off-Grid Mode",
+            variable=variables["off_grid_mode"],
+            font=("Roboto", 10, "bold")
+        )
+        self.offgrid_switch.grid(row=0, column=4, columnspan=2, sticky="e", padx=5, pady=(10, 5))
         
         # Row 1: SOC section with toggle
         self.soc_switch = ctk.CTkSwitch(
@@ -152,9 +160,13 @@ class OutletSettingsPanel(ctk.CTkFrame):
         self._add_setting_h("Low V (OFF):", variables["lv_threshold"], 6, 1)
         self._add_setting_h("LV Delay (s):", variables["lv_delay"], 6, 3)
         
+        # Row 7: Low Voltage Recovery parameters
+        self._add_setting_h("LV Recovery V:", variables["lv_recovery_voltage"], 7, 1)
+        self._add_setting_h("LV Recovery (s):", variables["lv_recovery_delay"], 7, 3)
+        
         # Divider
         ctk.CTkFrame(self, height=2, fg_color="#333333").grid(
-            row=7, column=0, columnspan=6, pady=10, sticky="ew"
+            row=8, column=0, columnspan=6, pady=10, sticky="ew"
         )
     
     def update_headroom_status(self, available: int, required: int) -> None:

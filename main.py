@@ -73,12 +73,15 @@ class DeyeApp(ctk.CTk):
                 "hv_threshold": ctk.StringVar(value=str(outlet.config.hv_threshold)),
                 "lv_threshold": ctk.StringVar(value=str(outlet.config.lv_threshold)),
                 "lv_delay": ctk.StringVar(value=str(outlet.config.lv_delay)),
+                "lv_recovery_voltage": ctk.StringVar(value=str(outlet.config.lv_recovery_voltage)),
+                "lv_recovery_delay": ctk.StringVar(value=str(outlet.config.lv_recovery_delay)),
                 "headroom": ctk.StringVar(value=str(outlet.config.headroom)),
                 "target_phase": ctk.StringVar(value=outlet.config.target_phase),
                 "soc_enabled": ctk.BooleanVar(value=outlet.config.soc_enabled),
                 "voltage_enabled": ctk.BooleanVar(value=outlet.config.voltage_enabled),
                 "export_enabled": ctk.BooleanVar(value=outlet.config.export_enabled),
                 "export_limit": ctk.StringVar(value=str(outlet.config.export_limit)),
+                "off_grid_mode": ctk.BooleanVar(value=outlet.config.off_grid_mode),
             }
 
     def _setup_ui(self) -> None:
@@ -131,7 +134,7 @@ class DeyeApp(ctk.CTk):
                 outlet_name=outlet.config.name,
                 variables=self.outlet_cfg[outlet.config.outlet_id]
             )
-            outlet_panel.grid(row=current_row, column=0, columnspan=3, padx=20, pady=5, sticky="nsew")
+            outlet_panel.grid(row=current_row, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
             self.outlet_settings[outlet.config.outlet_id] = outlet_panel
             current_row += 1
         
@@ -233,12 +236,16 @@ class DeyeApp(ctk.CTk):
         self.header.update_battery(data.soc, data.battery_power)
         self.header.update_grid(data.grid_power)
         
+        # Update off-grid mode switches from inverter status
+        for outlet_id in self.outlet_cfg:
+            self.outlet_cfg[outlet_id]["off_grid_mode"].set(not data.is_grid_connected)
+        
         # Update phase displays
         phase_max = int(self._get_safe_value(self.cfg["phase_max"], ems_defaults.phase_max))
         for i, name in enumerate(["L1", "L2", "L3"]):
             self.phases[name].update(
                 voltage=data.voltages[i],
-                load=data.grid_loads[i],  # Grid CT (may be 0 if no smart meter)
+                load=data.grid_loads[i],  # External CT (may be 0 if no CT sensor)
                 ups_load=data.ups_loads[i],  # UPS output (always available)
                 max_load=phase_max
             )
@@ -302,12 +309,15 @@ class DeyeApp(ctk.CTk):
                 outlet.config.hv_threshold = float(self._get_safe_value(cfg_vars["hv_threshold"], outlet.config.hv_threshold))
                 outlet.config.lv_threshold = float(self._get_safe_value(cfg_vars["lv_threshold"], outlet.config.lv_threshold))
                 outlet.config.lv_delay = int(self._get_safe_value(cfg_vars["lv_delay"], outlet.config.lv_delay))
+                outlet.config.lv_recovery_voltage = float(self._get_safe_value(cfg_vars["lv_recovery_voltage"], outlet.config.lv_recovery_voltage))
+                outlet.config.lv_recovery_delay = int(self._get_safe_value(cfg_vars["lv_recovery_delay"], outlet.config.lv_recovery_delay))
                 outlet.config.headroom = int(self._get_safe_value(cfg_vars["headroom"], outlet.config.headroom))
                 outlet.config.target_phase = cfg_vars["target_phase"].get()
                 outlet.config.soc_enabled = cfg_vars["soc_enabled"].get()
                 outlet.config.voltage_enabled = cfg_vars["voltage_enabled"].get()
                 outlet.config.export_enabled = cfg_vars["export_enabled"].get()
                 outlet.config.export_limit = int(self._get_safe_value(cfg_vars["export_limit"], outlet.config.export_limit))
+                outlet.config.off_grid_mode = cfg_vars["off_grid_mode"].get()
 
     def _process_logic(self, data: InverterData) -> None:
         """Process EMS logic (called from background thread)."""

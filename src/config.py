@@ -50,6 +50,8 @@ class OutletConfig:
     hv_threshold: float = 252.0
     lv_threshold: float = 210.0
     lv_delay: int = 10
+    lv_recovery_voltage: float = 220.0  # Voltage must exceed this for recovery
+    lv_recovery_delay: int = 300  # Seconds voltage must stay above recovery level (default 5 min)
     headroom: int = 4000
     target_phase: str = "L1"
     # Trigger enable flags
@@ -58,6 +60,7 @@ class OutletConfig:
     export_enabled: bool = True  # Enable export-based trigger
     export_limit: int = 5000
     runtime_delay: int = 300  # Seconds lower priority outlets must wait (default 5 min)
+    off_grid_mode: bool = False  # Enable off-grid mode (outlet runs without grid connection)
 
 
 def load_outlet_configs() -> List[OutletConfig]:
@@ -85,6 +88,8 @@ def load_outlet_configs() -> List[OutletConfig]:
         hv_threshold = float(os.getenv(f"{prefix}HV_THRESHOLD", "252.0"))
         lv_threshold = float(os.getenv(f"{prefix}LV_THRESHOLD", "210.0"))
         lv_delay = int(os.getenv(f"{prefix}LV_DELAY", "10"))
+        lv_recovery_voltage = float(os.getenv(f"{prefix}LV_RECOVERY_VOLTAGE", "220.0"))
+        lv_recovery_delay = int(os.getenv(f"{prefix}LV_RECOVERY_DELAY", "300"))
         headroom = int(os.getenv(f"{prefix}HEADROOM", "4000"))
         target_phase = os.getenv(f"{prefix}TARGET_PHASE", "L1")
         # Trigger enable flags
@@ -93,6 +98,7 @@ def load_outlet_configs() -> List[OutletConfig]:
         export_enabled = os.getenv(f"{prefix}EXPORT_ENABLED", "true").lower() == "true"
         export_limit = int(os.getenv(f"{prefix}EXPORT_LIMIT", "5000"))
         runtime_delay = int(os.getenv(f"{prefix}RUNTIME_DELAY", "300"))
+        off_grid_mode = os.getenv(f"{prefix}OFF_GRID_MODE", "false").lower() == "true"
         
         outlets.append(OutletConfig(
             outlet_id=i,
@@ -107,13 +113,16 @@ def load_outlet_configs() -> List[OutletConfig]:
             hv_threshold=hv_threshold,
             lv_threshold=lv_threshold,
             lv_delay=lv_delay,
+            lv_recovery_voltage=lv_recovery_voltage,
+            lv_recovery_delay=lv_recovery_delay,
             headroom=headroom,
             target_phase=target_phase,
             soc_enabled=soc_enabled,
             voltage_enabled=voltage_enabled,
             export_enabled=export_enabled,
             export_limit=export_limit,
-            runtime_delay=runtime_delay
+            runtime_delay=runtime_delay,
+            off_grid_mode=off_grid_mode
         ))
         
         i += 1

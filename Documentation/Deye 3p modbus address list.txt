@@ -1,0 +1,3214 @@
+Addr	Register meaning	R/W	data range	unit	note
+
+
+
+000	设备类型
+Device type	R			0X0200	组串机 inverter 0X0300	অ相储能机 hybird
+0X0400	微逆机 MI microinverter
+0X0500	й相储能机 phase3 hybird
+001	Modbus address	R	[1,247]		
+
+002	通 ” 协 䇞 ⡸ 本
+Communication	protocol version	R	‘0’~’9’;
+‘A’~’Z’		固件所遵从的本协䇞的⡸本，如 0x 0102
+ԓ表 1.2 ⡸
+
+003	SN byte 01	R	‘0’~’9’;
+‘A’~’Z’		The serial number is ten ASCII characters, If "AH12345678",
+Byte 01 is 0x41 (A),
+The 02nd byte is 0x48 (H),
+……
+The 09th byte is 0x37 (7), The tenth byte is 0x38 (8).
+	SN byte 02				
+
+004	SN byte 03	R	‘0’~’9’;
+‘A’~’Z’		
+	SN byte 04				
+
+005	SN byte 05	R	‘0’~’9’;
+‘A’~’Z’		
+	SN byte 06				
+
+006	SN byte 07	R	‘0’~’9’;
+‘A’~’Z’		
+	SN byte 08				
+
+
+007	SN byte 09	R	‘0’~’9’;
+‘A’~’Z’		
+	SN byte 10				
+
+008	࣏率等¾
+Rated Power	R	0x0000		
+
+009	保留ᆇ
+undefined	R	0x0000		
+
+010	保留ᆇ
+undefined	R			
+
+
+011	控制板辅ࣙঅƒ机软件
+⡸本ª
+Assistant program version	R	0XFFFF		Bit0-7 启ࣘ程序 bootloader software Bit8-15	辅ࣙ程序 Assistant program
+ 
+	控制板启ࣘ程序⡸本ª
+bootloader	software version				
+
+012	预留
+undefine	R			
+
+013	预留
+undefine	R			
+
+
+014	控制板固件⡸本-ᆇ段 2
+Control	panel	firmware version-2	R			
+
+
+015	控制板固件⡸本-▲⡸本
+Control	panel	firmware master version	R			
+
+
+016	通”板固件⡸本-ᆇ段 1 Comm	panel	firmware
+version-1	R			
+
+
+017	通”板固件⡸本-ᆇ段 2
+Comm	panel	firmware version-2	R			
+
+
+018	通”板固件⡸本-▲⡸本
+Comm	panel	firmware master version	R			
+
+019	安规类型
+Safety type	R			
+
+020	额定࣏率№ᆇ
+Rated power low word	R		0.1W	
+
+021	额定࣏率高ᆇ
+Rated power high word	R		0.1W	
+
+
+022	MPPT 路数及相数
+MPPT	number	and phases	R	[1,8]/[1,3]		MI	0x0503: five-mppts three-phase
+
+023	并网电压等¾/Rated Grid
+Voltage	R	[0-3]		0: 127/220V	1: 220/380V
+024					
+
+025	预留 SN byte 01				
+	预留 SN byte 02				
+
+026	预留 SN byte 03				
+	预留 SN byte 04				
+
+027	预留 SN byte 05				
+	预留 SN byte 06				
+
+028	预留 SN byte 07				
+	预留 SN byte 08				
+029	预留 SN byte 09				
+ 
+	预留 SN byte 10				
+030					
+031					
+					
+					
+059					
+					
+					
+					
+					
+					
+					
+					
+					
+5.1.	10 可读写可ਈ属性;，对应࣏能码是 0x10˚
+
+Addr	Register meaning	R/W	data range	unit	note
+
+
+60	t程䬱定使能
+Remote Lock	R/W			0x0002	ޣ机 turn off
+0x0000	开机 turn on
+
+61	开机自检时间
+self-check time	R/W	[0,1000]	S	MI (bylo -1)
+
+
+62	系统时间第 1 ᆇ节
+system time	byte 01	R/W	[0,255]	ᒤ
+Year	MI ԕ 20 00  ᒤѪ基值
+Based on the year 2000
+	系统时间第 2 ᆇ节
+system time	byte 02	R/W	[1,12]	$
+Month	
+
+
+63	系统时间第 3 ᆇ节
+system time	byte 03	R/W	[1,31]	日
+Day	
+	系统时间第 4 ᆇ节
+system time	byte 04	R/W	[0,23]	时
+Hour	
+
+
+64	系统时间第 5 ᆇ节
+system time	byte 05	R/W	[0,59]	࠶ Minute	
+	系统时间第 6 ᆇ节
+system time	byte 06	R/W	[0,59]	秒
+Sec	
+
+
+65	绝缘阻抗л限	
+insulation	
+
+R/W	
+
+[100,20000]	
+
+0.1KΩ	
+	Minimum					
+	impedance				
+						
+
+66	预留
+Undefine				
+
+67	预留
+Undefine				
+
+68	预留
+Undefine				
+ 
+
+69	预留
+Undefine				
+
+70	预留
+Undefine				
+
+71	预留
+Undefine				
+
+72	预留
+Undefine				
+
+73	预留
+Undefine				
+
+74	通”地址
+Communication address	
+R	
+0x0000	
+-	
+
+
+75	通”波特率
+Communication baud rate MI:Zigbee or PLC	
+
+R	
+
+0x0000	
+
+-	
+
+76	预留
+Undefine	
+R/W			
+
+77	$࣏࣏率调节
+Active power regulation	
+R/W	
+[0,1200]	
+0.1%/1%	如 800 表示调节到 80.0% MI
+If 800, adjust to 80.0%
+
+78	无࣏࣏率调节
+Reactive power regulation	
+R/W	
+[0,1200]	
+0.1%	如 800  表示调节到 80.0%
+If 800, adjust to 80.0%
+
+79	视在࣏率调节
+Apparent power regulation	
+R/W	
+[0,1200]	
+0.1%	如 800  表示调节到 80.0%
+If 800, adjust to 80.0%
+
+
+80	
+开ޣ机使能
+Switch on and off enable	
+
+R/W	
+
+[0,1]	
+
+-	0:ޣ机	1:开机MI 2:ޣ机
+
+0: power off 1: power on
+
+81	恢复出厂使能
+Factory reset enable	
+R/W	
+[0,1]		
+0: disable 1: enable
+
+82	自检时间
+Self-checking time	
+R/W	
+[0,1]	
+-	
+0-360 seconds
+
+83	孤岛保ᣔ使能
+Island protection enable	
+R/W	
+[0,1]		
+0: disable 1: enable
+
+
+84	MPPT路数MPPT number	
+R/W	
+[0,1]	
+-	
+0: disable 1: enable
+
+85	GFDI使能
+GFDI enable	
+R/W	
+[0,1]		
+0: disable 1: enable
+86					
+
+87	RISO 使能
+RISO enable	
+R/W	
+[0,1]		
+0: disable 1: enable
+
+
+88	
+并网标准
+GridStandard	
+
+R/W	
+
+[0,20]		1， 中国
+2， 巴西
+3， 印度
+ 
+					4， EN50438
+5，其他
+89					
+
+90	№压穿越使能
+Low voltage across enable				
+0: disable 1: enable
+
+
+
+91	控制板EEPROM 初始使能
+MCU-EEPROM initial
+enabled	
+
+
+R/W	
+
+
+[0,2]	
+
+
+-	
+0: ↓常工作 work normal
+1: 初始化控制板 EEPROM	init mcu eeprom
+
+
+
+92	通”板EEPROM 初始使能
+Comm-EEPROM initial
+enabled	
+
+
+R/W			
+0:↓常 work normal
+1:初始化通”板 EEPROM init comm eeprom
+
+
+
+
+93	
+
+控制板测试控制指÷
+
+Factory only				Bit0	开测试使能(使能䘉ਾ面的才$效) Test enable=1 if use later bit
+Bit1	开逆ਈ器全部风扇 open all fan
+Bit4	开启Gen信ª继电器	open Gen singal relay
+
+
+
+
+
+
+
+
+
+
+
+94	
+
+
+
+
+
+
+
+
+
+
+通”板测试控制指÷
+Factory only	
+
+
+
+
+
+
+
+
+
+
+R/W	
+
+
+
+
+
+
+
+
+
+
+[0,3]	
+
+
+
+
+
+
+
+
+
+
+-	Bit0	开测试使能(使能䘉ਾ面的才$效) Test enable=1 if use later bit
+Bit2	闪显示板的所$LED，蜂蜜器，背ݹ,显示红黄蓝
+Flash display board for all LEDs, honey maker, backlight, display red, yellow and blue
+Bit3	开启D电池接口测试Open lithium battery interface test Bit5	重启液晶程序
+Restart lcd
+95					
+
+96	发电量修↓系数
+PowerWH Factor	
+R/W		
+-0.01	100	mean 1
+111 mean 1.11
+
+97	Solar输入ѪSPU
+TEST MODE				
+
+
+98	电池充电类型
+Control Mode	R/W	-	-	0x0000	Lead-Battery, four-stage charging method
+0x0001	Lithium battery
+99	Equalization V	R/W	[3800,6100]	0.01V	1480 means 14.8v
+
+100	Absorption V	R/W	[3800,6100]	0.01V	1440 means 14.4v
+101	Float V	R/W	[3800,6100]	0.01V	1440 means 14.4v
+
+102	电池容量
+Batt Capacity	R/W	[0,2000]	1 Ah	200 means 200AH
+103	Empty_v	R/W		0.01V	
+ 
+
+104	最小limit起作用࣏率
+ZeroExport power	R/W			
+
+105	均衡充几天执行一⅑
+Equalization day cycle	R/W	[0 90]	Day	
+
+
+
+106	均衡充执行时间
+Equalization time	R/W	[0 20]	0.5Hour	࠶辨率 0.5小时Resolution 0.5 h
+[0-20]对应 0- 10小时
+但是发MCU是[0-100]
+
+107	温度补偿值
+TEMPCO	R/W	[0,50]	1mV/℃	ᑖ$↓负的int型 Signed int
+
+108	电池最大充电电流
+Max A Charge	R/W	[0,185]	1A	0-185A
+
+109	电池最大放电电流
+Max A discharge	R/W	[0,185]	1A	0-185A
+
+110	保留
+undefined	R/W			
+
+
+
+111	电池工作根据电压䘈是容量
+battery operates according
+to voltage or capacity	R/W			根据电压 According to the voltage
+根据容量 According to the capacity
+2	没$电池 no battery
+
+
+112	D电池唤醒标志ƒ
+Lithium battery wake up sign bit	R/W			0	enabled
+1	Disable
+
+113	电池内阻值
+battery	resistance value	R/W	[0,6000]	mΩ	
+
+114	电池充电效率
+Battery charging efficiency	R/W	[0-100]	0.1%	983表示98.3%
+983 is	98.3%
+
+115	电池容量ShutDown
+battery capacity ShutDown	R/W	[0,100]	1%	№容量截‡点
+Low capacity cutoff point
+
+116	电池容量Restart
+battery capacityRestart	R/W	[0,100]	1%	保ᣔ恢复点
+Protection recovery point
+
+117	电池容量LowBatt
+battery capacityLowBatt	R/W	[0,100]	1%	
+
+118	电池电压ShutDown
+battery voltageShutDown	R/W	[3800,6100]	0.01V	№保ᣔ点 cutoff	41V
+Low protection point cutoff 41V
+
+119	电池电压Restart
+battery voltageRestart	R/W	[3800,6100]	0.01V	Reboot /recover	52V
+
+120	电池电压LowBatt
+battery voltageLowBatt	R/W	[3800,6100]	0.01V	放电深度	46V Discharge
+depth 46V
+
+
+121	发电机最大运行时间
+Maximum operating time of generator			0.1 hours	120表示12小时120 is 12 hours
+
+122	发电机冷K时间
+Generator cooling time			0.1 hours	120表示12小时
+120 is 12 hours
+ 
+
+
+123	发电机充电启ࣘ电压点
+Generator charging Starting voltage point	R/W	[0000 6300]	0.01V	电池电压小于䘉个值发电机开启充电
+The battery voltage is less than this value
+
+
+124	发电机充电启ࣘ容量点
+Generator charging starting capacity point	R/W	[0000 6300]	1%	电池容量小于䘉个值发电机开启充电
+The battery capacity is less than this value
+
+
+125	发电机对电池充电电流
+Generator	charges	the battery	current	R/W	[0000 185]	1A	发电机对电池充电电流
+The generator charges the battery
+
+
+126	市电充电启ࣘ电压点
+Grid charging Start voltage point o	R/W	[0000 6300]	0.01v	
+
+
+127	市电充电启ࣘ容量点
+Grid	charging	start capacity point	R/W	[0000 6300]	1%	
+
+
+128	市电对电池充电电流
+Grid	charge	the battery current	R/W	[0000 185]	1A	市电对电池充电电流
+Grid	charge	the battery	current
+
+
+129	发电机充电使能
+Generator is charged to enable	R/W			
+
+130	市电充电使能
+Grid	is charged to enable	R/W			
+131	AC couple 频率к限设置	R/W	5000-6500		5000-6500
+
+
+
+
+132	强制开启发电机作Ѫ负载
+࣏能
+Force on generator as load function	R/W			前提是235ª寄ᆈ器已经使能1
+The premise is that register 234 has enabled 1
+0	н强制 Do not force
+1	强制	force
+
+
+
+133	发电机输入作Ѫ负载输出使能
+generator input is enabled
+as the load output	R/W			0	只作Ѫ发电机输入 only Gen use
+1	智能负载输出 only smart load output
+2	使能作Ѫ逆ਈ器输入 only microinverter input
+
+
+134	发电机负载OFF电压
+SmartLoad	OFF	batt Voltage	R/W	[3800 6300]	0.01V	
+
+135	发电机负载OFF电量
+SmartLoad OFF batt	R/W	[0000 100]	1%	
+
+
+136	发电机负载ON电压
+SmartLoad ON batt Voltage	R/W	[3800 6300]	0.01V	
+
+137	发电机负载ON电量
+SmartLoad ON batt	R/W	[0000 100]	1%	
+138	输出电压等¾设定	R/W			0	表示220V means 220V
+ 
+	Output voltage level setting				1	表示230V means 230V
+2	表示240V means 240V
+3	表示120V means 120V 4	133VAC
+
+
+
+139	开启发电机的最小solar࣏ 率
+minimum	solar	power
+required to start a generator	R/W	[0,8000]	1W	
+
+140	发电机并网信ª
+Gen_Grid_Signal On				
+
+
+
+
+
+
+
+
+
+
+
+
+
+141	能量管理模式 Energy management model				Bit0-1	10 电池优] 模式 battery first mode
+11 负载优]模式 load first mode Bit2-3	表示被ࣘ 并网࣏ 率ᒣ 衡࣏ 能Represents passive grid-connected power balance function
+10	н开启 colse
+11	开启 open
+Bit4-5 表示▲ ࣘ 并网࣏ 率ᒣ 衡࣏ 能Represents active grid-connection power balance function
+10	н开启 close
+11	开启 open
+
+
+
+
+
+142	limit控制࣏能
+limit control function	R/W		0/1	0x00 使能আ电
+sell electricity enabled
+0x01 使能内置 built-in	enabled 0x02 使能外置
+extraposition	enabled
+
+
+
+143	限制并网最大࣏率输出Limit the maximum power output	of	the	grid
+connection	R/W	[0,8000]	1W	ԓ表总࣏率
+Represents total power
+
+
+
+144	外置电流传感器方向External	current	sensor clamp phase	R/W	[xx,00]	1W	[11][12]
+
+145	ݹ伏আ电
+Solar sell	R/W			0x00ݹ伏нআ电 solar	Don't sell 0x01ݹ
+伏আ电 solar sell
+
+
+
+
+146	高¾削峰填谷࣏能使能Time	of	Use	Selling enabled	R/W			Bit0	0 disable
+1 enable
+Bit1	Monday
+0-disable 1-enable Bit2	Tuesday
+ 
+					……
+Bit7	Sunday
+
+
+
+147	
+
+й相ABC电网相序设定
+Grid Phase	
+
+
+R/W			
+
+0	0	120	240
+1	0	240	120
+
+148	আ电模式时间点1
+Sell mode time point 1	R/W	[0000 2359]		2359表示时间23:59
+2359 means time 23:59
+
+
+149	আ电模式时间点2 Sell mode time point 2	R/W	[0000 2359]		Time
+
+150	আ电模式时间点3
+Sell mode time point 3	R/W	[0000 2359]		
+
+151	আ电模式时间点4
+Sell mode time point 4	R/W	[0000 2359]		
+
+152	আ电模式时间点5
+Sell mode time point5	R/W	[0000 2359]		
+
+153	আ电模式时间点6
+Sell mode time point6	R/W	[0000 2359]		
+
+
+154	আ电模式时间点1࣏率
+Sell   mode   time   point   1	R/W	[0000 8000]	1W	ਇ到电池最大放电࣏率影响 Affected by the maximum discharge power of the battery
+
+155	আ电模式时间点2࣏率
+Sell   mode   time   point   2	R/W	[0000 8000]	1W	Power
+
+156	আ 电模式时间点 3 ࣏ 率
+Sell   mode   time   point   3	R/W	[0000 8000]	1W	
+
+157	আ 电模式时间点 4 ࣏ 率
+Sell   mode   time   point   4	R/W	[0000 8000]	1W	
+
+158	আ 电模式时间点 5 ࣏ 率
+Sell   mode   time   point   5	R/W	[0000 8000]	1W	
+
+159	আ 电模式时间点 6 ࣏ 率
+Sell   mode   time   point   6	R/W	[0000 8000]	1W	
+
+160	আ 电模式时间点 1 电 压
+Sell   mode   time   point   1	R/W	[0000 6300]	0.01V	ਇ到电池电压的影响
+Is affected by the battery voltage
+
+161	আ 电模式时间点 2 电 压
+Sell   mode   time   point   2	R/W	[0000 6300]	0.01V	Voltage
+
+162	আ 电模式时间点 3 电 压
+Sell   mode   time   point   3	R/W	[0000 6300]	0.01V	
+ 
+
+163	আ 电模式时间点 4 电 压
+Sell   mode   time   point   4	R/W	[0000 6300]	0.01V	
+
+164	আ 电模式时间点 5 电 压
+Sell   mode   time   point   5	R/W	[0000 6300]	0.01V	
+
+165	আ 电模式时间点 6 电 压
+Sell   mode   time   point   6	R/W	[0000 6300]	0.01V	
+
+166	1容量 1 capacity	R/W	[0,100]	1%	Soc
+167	2容量 2 capacity	R/W	[0,100]	1%	
+168	3容量 3 capacity	R/W	[0,100]	1%	
+169	4容量 4 capacity	R/W	[0,100]	1%	
+170	5容量 5 capacity	R/W	[0,100]	1%	
+171	6容量 6 capacity	R/W	[0,100]	1%	
+
+
+
+172	时间点1充电使能
+Time point 1 charge enable	R/W	[0,1]		Bit0	表示电网充电使能 grid charging enable
+Bit1	表示发电机充电使能 gen charging
+enable
+
+
+173	时间点2充电使能
+Time point 2 charge enable	R/W	[0,1]		№к
+
+174	时间点3充电使能
+Time point 3 charge enable	R/W	[0,1]		№к
+
+175	时间点4充电使能
+Time point 4 charge enable	R/W	[0,1]		№к
+
+176	时间点5充电使能
+Time point 5 charge enable	R/W	[0,1]		№к
+
+177	时间点6充电使能
+Time point 6 charge enable	R/W	[0,1]		№к
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+178	控制板特殊࣏能ƒ 1 Microinverter export to grid cutoff	R/W	[0,1]		需要全部改ᡀ两ƒ控制 need two bits control
+-00无ࣘ作-01无ࣘ作-10失能-11使能
+-00Nowork-01Nowork-10Disable-11Ena ble
+Bit0-1	10:Disable
+11:enable
+Bit2-3		10:Gen peak-shaving disable 11:Gen peak-shaving enable
+Bit4- 5: 10:Grid peak-shaving disable 11:Grid peak-shaving enable
+Bit6-7		10:On Grid always on disable 11:On Grid always on enable
+Bit8-9		10:external relay disable 11:external relay disable
+Bit10-11	10:  D电池丢失 故障 disable Loss of lithium battery report fault disable
+11: D电池丢失 故障 enable Loss of lithium battery report fault enable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+179	控制板特殊࣏能ƒ 2
+1,外置CT自ࣘ检测方向
+2,强制脱网	R/W	[0,1]		Bit0-1		10:外置CT自ࣘ检测方向 disable Externl ct direction check disable
+11:enable
+Bit2-3	10:强制离网工作 disable Forced off-grid work disable
+11:enable
+ 
+
+
+
+
+
+180	恢复并网时间
+Restore connection time	R/W	[10 300]		
+
+181	Solar Arc Fault模式开启Solar	Arc	Fault	Mode	R/W	[0 1]		0x00 ޣ闭 Close 0x01 开启 open
+
+
+
+
+182	并网标准
+Grid Mode	R/W	[0 1 ]		0=通用标准 general standard 1= UL1741&IEE1547
+2= CPUC RULE21
+3= SRD-UL1741
+……
+
+183	电网频率设置
+Grid Frequency	R/W	[0 1]		0x00 50HZ
+0x01 60hz
+
+
+
+
+
+
+
+
+184	电网类型设置
+Grid Type
+⧠在是й相，无效	R/W	[0 3 ]		0x00 অ相 默认220V
+Single-phase 240 v / 230 v / 220 v 0x01 表示两相120V/240V Stands for two-phase 120V/240V
+0x02 表示й相系统208V 120度120V Represents the three-phase system 208V 120 degrees 120V
+0X03	120V Single Phase
+
+185	电网高压保ᣔ点
+Grid Vol High	R/W	[1800 2700]	0.1V	
+
+186	电网№压保ᣔ点
+Grid Vol Low	R/W	[1800 2700]	0.1V	
+
+187	电网频率高保ᣔ点
+Grid Hz High	R/W	[4500 6500]	0.01Hz	
+
+188	电网频率№保ᣔ点
+Grid Hz Low	R/W	[4500 6500]	0.01Hz	
+
+
+189	发电机连接到电网输入端
+The generator is connected to the grid input	R/W	[1 0]		0	disable
+1	enabled
+190	GEN peak shaving Power	R/W	[0 16000]	1w	
+191	GRID peak shaving Power	R/W	[0 16000]	1w	
+192	Smart Load Open Delay	R/W	[1 120]	1Minute	
+
+
+193	输出PF值设定($࣏调节
+Output PF value Settings	R/W	[800 1200]		800表示调整到80% 1200标识调整到120%
+800 for 80%, 1200 for 120%
+
+194	外部继电器ƒ
+External relay bit	R/W	[0 0xFFFF]		Bit0-8 对应8个继电器ƒ
+Bit0-8 corresponds to 8 relay bits
+
+195	ARC_facTory_B高ƒ
+ARC_facTory_B high word	R/W	[0,65535]		高ƒ和地ƒ组合，ԕ数值显示ণ可
+High and status combination, with numerical
+ 
+					display can be
+
+196	№ƒ
+Low	word	R/W	[0,65535]		
+
+197	ARC_facTory_I	高	ƒ
+ARC_facTory_I high word	R/W	[0,65535]		
+
+198	№ƒ
+Low	word	R/W	[0,65535]		
+
+199	ARC_facTory_F高ƒ
+ARC_facTory_F high word	R/W	[0,65535]		
+
+200	№ƒ
+Low	word	R/W	[0,65535]		
+
+201	ARC_facTory_D高ƒ
+ARC_facTory_D high word	R/W	[0,65535]		
+
+202	№ƒ
+Low	word	R/W	[0,65535]		
+
+203	ARC_facTory_T高ƒ
+ARC_facTory_T high word	R/W	[0,65535]		
+
+204	№ƒ
+Low	word	R/W	[0,65535]		
+
+205	ARC_facTory_C高ƒ
+ARC_facTory_C high word	R/W	[0,65535]		
+
+206	№ƒ
+Low	word	R/W	[0,65535]		
+
+
+207	ARC_facTory_Frz高ƒ
+ARC_facTory_Frz	high word	R/W	[0,65535]		
+
+208	№ƒ
+Low	word	R/W	[0,65535]		
+
+209	Ups_delay time	R/W		1S	0	Ѫ默认
+1	1S
+
+210	充电电压
+charging voltage	R/W		0.01V	
+
+211	放电电压
+discharge voltage	R/W		0.01V	
+
+212	充电限流
+charging current limiting	R/W		1A	
+
+213	放电限流
+Discharge current limiting	R/W		1A	
+
+214	当前容量
+real time Capacity	R/W		1%	
+
+215	当前电压
+real time voltage	R/W		0.01V	
+216	当前电流	R/W		1A	
+ 
+	real time current				
+
+
+
+
+217	当前温度
+real time temp	R/W		0.1C	1000 对应0 度 1200 表示20.0 度 800 表示
+-20.0C
+1000 corresponds to 0 degrees
+1200 means 20.0 degrees
+800 means -20.0C
+
+
+218	离网充电限流 最大 值
+Maximum charge current limit	R/W		1A	
+
+
+219	离网放电限流 最大值
+Maximum discharge current limiting	R/W			
+
+
+220	D电池告警ƒ
+Lithium	battery	alarm position	R/W			0x0001
+
+
+221	D电池故障ƒ
+Lithium	battery	fault location	R/W	[0,65535]		
+
+222	D电池标志2
+Lithium battery symbol 2	R/W	[0,65535]		Bit0	空缺 Vacancy
+Bit1	强ߢ标志 Strong impact marks
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+223	D电池类型
+Lithium battery type	R/W			0x0000	中ޤ派能 德朗能D
+PYLON	SOLAX
+通用CAN协䇞
+0x0001	天邦达RS485modbus协䇞
+0x0002	KOK协䇞
+0x0003	keith 0X0004		拓派协䇞
+0X0005	派能485协䇞
+0X0006	杰力斯485协䇞
+0X0007	欣旺达485协䇞
+0X0008	欣瑞能485协䇞
+0X0009	天邦达485协䇞
+0X000A 晟高电气can协䇞
+
+224	D电池SOH
+Lithium battery SOH				
+225					
+226					
+227	Upgrade LCD test	R/W	[0,1]		
+
+
+
+228	通”板设置࣏能
+Comm	board	setting function	R/W			Bit0-1	时间校时
+
+Bit2-3	beep
+Bit4-5	AM/PM
+ 
+					Bit6-7	Auto dim
+-00无ࣘ作 no work
+-01无ࣘ作 no work
+-10失能 disable
+-11使能 enable
+229					
+230					
+231					
+232					
+233					
+234					
+235					
+236					
+237					
+238					
+239					
+240	䘋入厂内初测程序	R/W			=12345 䘋入
+241					
+242					
+243					
+244					
+245					
+246					
+247					
+248					
+249					
+250					
+251					
+252					
+253					
+254					
+255					
+256					
+257					
+258					
+259					
+260					
+261					
+262					
+263					
+264					
+265					
+266					
+ 
+267					
+268					
+269	Grid1_I				
+270	Grid2_I				
+271	Grid3_I				
+272	Grid_V_L1				
+273	Grid_V_L2				
+274	Grid_V_L3				
+275	Limit1_I				
+276	Limit2_I				
+277	Limit3_I				
+278	PV1_V				
+279	PV1_I				
+280	PV2_V				
+281	PV2_I				
+282	INV_A_I				
+283	INV_B_I				
+284	INV_C_I				
+285	INV_A_V				
+286	INV_B_V				
+287	INV_C_V				
+288	BAT_I				
+289	BAT_V				
+290					
+291					
+292					
+293					
+294					
+295					
+296					
+297					
+298					
+299					
+300					
+301					
+302					
+303					
+304					
+305					
+306					
+307					
+308					
+309					
+ 
+
+
+310	Solar做Wind输入使能
+Solar makes Wind input enable	R/W	[0,1]		Bit0	Solar1
+Bit1	Solar2
+311	Voltage	1	R/W	[500,5000]	0.1V	
+312	Voltage	2	R/W		0.1V	
+313	Voltage	3	R/W		0.1V	
+314	Voltage	4	R/W		0.1V	
+315	Voltage	5	R/W		0.1V	
+316	Voltage	6	R/W		0.1V	
+317	Voltage	7	R/W		0.1V	
+318	Voltage	8	R/W		0.1V	
+319	Voltage	9	R/W		0.1V	
+320	Voltage	10	R/W		0.1V	
+321	Voltage	11	R/W		0.1V	
+322	Voltage	12	R/W		0.1V	
+323	Current	1	R/W	[0-200]	0.1A	
+324	Current 2	R/W		0.1A	
+325	Current 3	R/W		0.1A	
+326	Current 4	R/W		0.1A	
+327	Current 5	R/W		0.1A	
+328	Current 6	R/W		0.1A	
+329	Current 7	R/W		0.1A	
+330	Current 8	R/W		0.1A	
+331	Current 9	R/W		0.1A	
+332	Current 10	R/W		0.1A	
+333	Current 11	R/W		0.1A	
+334	Current 12	R/W		0.1A	
+
+335	预留
+Undefine				
+
+336	并联1
+Parallel-1				
+
+337	并联2
+Parallel-2				
+
+338	预留
+Undefine				
+
+339	预留
+Undefine				
+
+340	ݹ伏最大আ电࣏率
+Max Solar Sell Power		R/W	1W	
+
+341	预留
+Undefine				
+
+342	预留
+Undefine				
+ 
+
+343	预留
+Undefine				
+
+
+
+344	电网信息监测方式
+Grid check from Meter or CT	R/W			BIT00:
+0:CT
+1:Meter
+BIT01: -BIT15: undefine
+345					
+346					
+
+347	外置CTਈ比
+CT ratio	R/W		30<-->
+30:1	U16
+
+348	外置Meter CTਈ比Meter CT ratio	R/W		30<-->
+30:1	U16
+349					
+
+350	Charge⧟的输入斜率控制
+↓数	R/W	[0-500]	W	逐周期࣏率ਈ化
+Cycle by cycle power variation
+
+351	Charge⧟的输入斜率控制
+负数	R/W	[0-500]	W	逐周期࣏率ਈ化
+Cycle by cycle power variation
+					
+
+359	离网过载 电压小于180V
+持续时间				
+360					
+					
+					
+					
+
+
+380	࣐ 州 № 压 高 压 穿 越CA_LHVRT使能 California low pressure high pressure	through
+CA_LHVRT enable	R/W	[0,1]		0:	disable 1: enable
+381	CA_HV2	R/W	[1000,3000]		
+382	CA_HV1	R/W			
+383	CA_LV1	R/W			
+384	CA_LV2	R/W			
+385	CA_LV3	R/W			
+386	CA_HV2_Time	R/W	[0,300]		0 is 0.16S
+387	CA_HV1_Time	R/W			
+388	CA_LV1_Time	R/W			
+389	CA_LV2_Time	R/W			
+390	CA_LV3_Time	R/W			
+
+
+391	࣐ 州 № 频 高 频 穿 越CA_LHFRT使能 California low frequency high	frequency	traverses
+CA_LHFRT enable	R/W			
+392	CA_HF2	R/W	[4500,6500]	0.01Hz	
+ 
+393	CA_HF1	R/W			
+394	CA_LF1	R/W			
+395	CA_LF2	R/W			
+396	CA_HF2_Time	R/W	[0,300]		
+397	CA_HF1_Time	R/W			
+398	CA_LF1_Time				
+399	CA_LF2_Time				
+
+400	࣐州CA_QV使能
+California	CA_QV enable				
+401	CA_QV_V1		[1000,3000]		
+402	CA_QV_V2				
+403	CA_QV_V3				
+404	CA_QV_V4		[-44,+44]	0.01	
+405	CA_QV_Q1				
+406	CA_QV_Q2				
+407	CA_QV_Q3				
+408	CA_QV_Q4				
+409	࣐州CA_FW使能
+California	CA_FW enable				
+410	CA_Fstart				
+411	CA_Fstop				
+
+412	࣐州CA_VW使能
+California	CA_VW enable				
+413	CA_Vstart				
+414	CA_Vstop				
+415	↓常к升斜率
+Normal upward slope	R/W	[1 100]	1%	
+416	软启ࣘк升速率
+Soft start rise rate	R/W	[1 100]	1%	
+417	QV Response time	R/W	[0,90]	S	
+418	VW Response time	R/W	[0,60]	S	
+419	FW Response time				
+
+5.2.	03 只读实时属性;，对应࣏能码是 0x03˚
+
+Addr	Register meaning	R/W	data range	unit	note
+
+
+
+500	
+
+运行状态
+run	state	
+
+R	
+
+[0,5]	
+
+-	0000	待机 standby
+0001	自检 selfcheck
+0002	↓常 normal
+0003	告警 alarm
+0004	故障 fault
+ 
+
+
+
+501	逆ਈ器电网侧当日$࣏发电量
+active power generation of
+today	
+
+
+R	
+
+
+[-32768,32767]	
+
+
+0.1kWh	
+
+
+
+502	逆ਈ器电网侧当日无࣏发电量
+reactive power generation of
+today	
+
+
+R	
+
+
+[-32768,32767]	
+
+
+0.1kVarh	
+
+503	当日并网时间
+Grid connection time of today	
+R	
+[0,65535]	
+S	
+
+
+
+504	逆ਈ器电网侧总$࣏发电量
+№ᆇ
+active power generation of total low byte	
+
+
+R	
+
+
+
+[0,0xFFFFFFFF]	
+
+
+
+0.1kWh	
+
+
+
+505	逆ਈ器电网侧总$࣏发电量高ᆇ
+active power generation of
+total high byte	
+
+
+R			
+
+
+
+506	逆ਈ器电网侧总无࣏发电量
+№ᆇ
+reactive power generation of total low byte				
+
+
+
+507	逆ਈ器电网侧总无࣏发电量高ᆇ
+reactive power generation of
+total high byte				
+
+
+508	
+
+逆ਈ器状态ƒ1	
+
+R			Debug only 调试用，无意义
+Bit0:内部风扇ᆈ在ƒ:1$ 0无Bit1:外部风扇ᆈ在ƒ:1$ 0无
+509	逆ਈ器状态ƒ1	R			Debug only 调试用，无意义
+510					
+511					
+512					
+513					
+
+514	电池当日充电量
+Today charge of the battery			
+0.1kwh	
+
+
+515	电池当日放电量
+Today	discharge	of	the battery			
+
+0.1kwh	
+
+
+516	电池累计充电量№ᆇ
+Total charge of the battery low byte			
+
+0.1kwh	
+
+517	电池累计充电量高ᆇ
+Total charge of the battery			
+0.1kwh	
+ 
+	high byte				
+
+
+518	电池累计放电量№ᆇ
+Total discharge of the battery low byte			
+
+0.1kwh	
+
+
+519	电池累计放电量高ᆇ
+Total discharge of the battery high byte			
+
+0.1kwh	
+
+520	电网当日购电量
+Day_GridBuy_Power Wh			
+0.1kwh	
+
+521	电网当日আ电量
+Day_GridSell_Power Wh			
+0.1kwh	
+
+
+522	电网累计购电量№ᆇ
+Total_GridBuy_Power Wh_low word			
+
+0.1kwh	
+
+
+523	电网累计购电量高ᆇ
+Total_GridBuy_Power Wh_high word			
+
+0.1kwh	
+
+
+524	电网累计আ电量№ᆇ
+Total_GridSell_Power Wh_low word			
+
+0.1kwh	
+
+
+525	电网累计আ电量高ᆇ
+Total_GridSell_Power Wh_high word			
+
+0.1kwh	
+
+526	当日用电量
+Day_Load_Power Wh			
+0.1kwh	
+
+
+527	累计用电量№ᆇ
+Total_Load_Power Wh_low word			
+
+0.1kwh	
+
+
+528	累计用电量高ᆇ
+Total_Load_Power Wh_high word			
+
+0.1kwh	
+
+529	当日总PV发电量
+Day_PV_Power Wh	
+R	
+[0,65535]	
+0.1kWh	
+
+530	当日PV-1发电量
+Day_PV-1_Power Wh			
+0.1kWh	
+
+531	当日PV-2发电量
+Day_PV-2_Power Wh			
+0.1kWh	
+
+532	当日PV-3发电量
+Day_PV-3_Power Wh			
+0.1kWh	
+
+533	当日PV-4发电量
+Day_PV-4_Power Wh			
+0.1kWh	
+
+
+534	历史PV发电量№ᆇ
+Total	PV_power	Wh_low word	
+
+R		
+
+0.1kWh	
+ 
+
+
+535	历史PV发电量高ᆇ
+Total	PV_power	Wh_high word	
+
+R		
+
+0.1kWh	
+536					
+537					
+538					
+
+
+539	发电机日工作时间
+Generator working hours per
+day			
+
+0.1h	
+
+
+540	DCਈ压器温度(DCTransformer
+temperature)	
+
+R	
+
+[0,3000]	
+0.1℃	
+偏移1000
+
+541	散热ƒ温度
+Heat sink temperature		
+[0,3000]	
+0.1℃	
+
+542	预留温度1 undefine		
+[0,3000]	
+0.1℃	
+
+543	预留温度2 undefine	
+R	
+[0,3000]	
+0.1℃	
+
+544	预留温度3
+undefine	
+R	
+[0,3000]	
+0.1℃	
+545					
+546					
+547					
+
+
+548	通”板的故障状态
+Failure status of
+communication board	
+
+R	
+
+[0,0xFFFF]		Bit0	Flash chip error Bit1	time error
+Bit2	EEPROM error
+
+
+549	
+
+MCU测试标志ƒ MCU test flag				Bit0	拉弧通”标志 Arc pull communication sign
+Bit1	可并联CAN通” Parallel CAN
+communication
+
+
+
+
+
+
+550	
+
+
+
+
+LCD测试标志ƒ LCD test flag	
+
+
+
+
+
+R	
+
+
+
+
+
+0x0000		Bit8	D电接口RS485 Lithium electric interface RS485
+Bit9	D电接口CAN Lithium electric interface CAN
+
+Bit10	按键1234 key1234
+Bit11	液晶中断状态 lcd interrupt
+status
+551	开ޣ机状态
+Turn off/on status	R			№4ƒ表示开ޣ信ª
+0000 ޣ机	power off
+0001 开机	power on
+552	AC侧继电器状态AC realy status	R			0	off
+1	on
+Bit0	INV继电器 INV relay
+Bit1	负载继电器 预留 undefine Bit2	电网继电器 grid relay
+Bit3	发电机继电器 gen relay
+Bit4	电网供电继电器 grid give power to relay
+ 
+					Bit5	ç接点 Dry contact
+
+553	
+告警信息第 1 ᆇ
+Warning message word 1	
+R	
+[0,65535]		Bit0: reserved
+Bit1:风扇故障	FAN_WARN
+Bit2:电网相ƒ错误 grid phase wrong
+Bit3:
+
+554	告警信息第 2 ᆇ
+Warning message word 2	
+R	
+[0,65535]		
+
+555	故障信息第 1ᆇ
+Fault information word 1	
+R	
+[0,65535]		
+
+
+
+
+
+
+
+
+见故障信息编码表
+
+556	故障信息第 2ᆇ
+Fault information word 2	
+R	
+[0,65535]		
+
+557	故障信息第 3 ᆇ
+Fault information word 3	
+R	
+[0,65535]		
+
+558	故障信息第 4 ᆇ
+Fault information word 4	
+R	
+[0,65535]		
+559	预留				
+560	预留				
+
+561	调试数据
+Debug Data				
+	561-583	一共23 个调
+试数据				
+
+583	调试数据
+Debug Data	
+R	
+0x0000		
+
+584	预留
+undefine				
+
+585	预留
+undefine				
+
+586	电池温度
+battery temperature	R 0	[0,3000]	0.1℃	
+
+587	电池电压
+battery voltage	R 1		0.01V	
+
+588	电池电量
+battery capacity	R 2	[0,100]	1%	
+
+589	保留
+undefined	R 3			
+
+590	电池输出࣏率
+Battery output	power	R4		1W	S16
+
+591	电池输出电流
+Battery output current	R5		
+0.01A	S16
+
+592	电 池 校 ↓ ਾ 的 容 量
+Corrected_AH	6	
+[0,3000]	
+1AH	
+100 is 100AH
+593		7			
+594		8			
+ 
+595		9			
+596		10			
+597		11			
+
+598	电网侧相电压A Grid phase voltage A	R12		0.1V	
+
+599	电网侧相电压B Grid phase voltage B	R13		0.1V	
+
+600	电网侧相电压C Grid phase voltage C	R14		0.1V	
+
+601	电网侧线电压AB Grid line voltage AB	R15		0.1V	预留
+
+602	电网侧线电压BC
+Grid line voltage BC	R16		0.1V	
+
+603	电网侧线电压CA Grid line voltage CA	R17		0.1V	
+
+
+604	电网侧内侧A相࣏率
+A phase power on the inner
+side of the grid	
+R18		
+1W	S16
+
+
+605	电网侧内侧B相࣏率
+B phase power on the inner
+side of the grid	R19		
+1W	S16
+
+
+606	电网侧内侧C相࣏率
+C phase power on the inner
+side of the grid	R20		
+1W	S16
+
+
+607	电网侧-内侧总$࣏࣏率Total active power from side to side of the grid	
+R21		
+1W	
+
+
+608	电网侧-内侧总视在࣏率
+Grid side - inside total
+apparent power	
+R22		
+1W	预留
+
+609	电网侧频率
+Grid-side frequency	23			
+
+610	电网侧内侧电流A
+grid side inner current A	R24		0.01A	S16
+
+611	电网侧内侧电流B
+grid side inner current B	R25		0.01A	S16
+
+612	电网侧内侧电流C
+grid side inner current C	R26		0.01A	S16
+
+613	电网外置-电流A
+Out-of-grid - current A	R27		0.01A	S16
+
+614	电网外置-电流B
+Out-of-grid - current B	R28		0.01A	S16
+
+615	电网外置-电流C
+Out-of-grid - current C	R29		0.01A	S16
+
+616	电网外置-࣏率A Out-of-grid -power A	R30		1W	S16
+
+617	电网外置-࣏率B
+Out-of-grid -power B	R31		1W	S16
+
+618	电网外置-࣏率C Out-of-grid -power C	R32		1W	S16
+
+619	电网外置-总$࣏࣏率
+Out-of-grid –total power	R33		1W	S16
+620	电网外置-总视在࣏率	R34		1VA	S16
+ 
+	Out-of-grid –total apparent power				
+
+
+621	并网࣏率因数 PF
+Grid-connected power factor PF	
+R35	
+
+R/W	
+
+[0,1000]	
+
+真实值*1000
+
+
+622	电网侧A相࣏率
+Grid side A-phase power	36		
+1W	ԕлй个寄ᆈ器根据内置外置设置ਈ化
+The following three registers vary according to the built-in and external Settings
+
+623	电网侧B相࣏率
+Grid side B-phase power	37		1W	
+
+624	电网侧C相࣏率
+Grid side C-phase power	38		1W	
+
+625	电网侧-总$࣏࣏率
+Grid side total power	39		1W	
+626		40			
+
+
+627	逆ਈ器输出相电压A
+Inverter output phase voltage A	
+R41		
+0.1V	
+
+
+
+628	逆ਈ器输出相电压B
+Inverter output phase voltage B	
+
+R42		
+
+0.1V	
+
+
+629	逆ਈ器输出相电压C
+Inverter output phase voltage C	
+R43		
+0.1V	
+
+
+
+630	逆ਈ器输出相电流A
+Inverter output phase current A	44		
+
+0.01A	S16
+
+
+631	逆ਈ器输出相电流B Inverter output phase
+current B	45		
+0.01A	S16
+
+
+632	逆ਈ器输出相电流C Inverter output phase current C	46		
+0.01A	S16
+
+
+633	逆ਈ器输出相࣏率A Inverter output phase
+power A	R47		
+1W	S16
+
+
+634	逆ਈ器输出相࣏率B Inverter output phase
+power B	
+R48		
+1W	S16
+
+
+635	逆ਈ器输出相࣏率C Inverter output phase
+power C	49		
+1W	S16
+
+
+636	逆ਈ器输出总$࣏࣏率
+Inverter output total
+power	R50		
+1W	S16
+
+
+637	逆ਈ器输出总视在࣏率
+Inverter output total
+apparent power	51		
+1W	S16
+ 
+
+638	逆ਈ器频率
+Inverter frequency	52		0.01Hz	U16
+639		53			
+
+
+640	UPS负载侧相࣏率A
+UPS load-side phase power
+A	54		
+1W	U16
+
+
+641	UPS负载侧相࣏率B
+UPS load-side phase power
+B	55		
+1W	U16
+
+
+642	UPS负载侧相࣏率C
+UPS load-side phase power
+C	56		
+1W	U16
+
+643	UPS负载侧总࣏率C UPS load-sidetotal power	57		1W	U16
+
+644	负载测相电压A Load phase voltage A	R58		0.1V	U16
+
+645	负载测相电压B Load phase voltage B	R59		0.1V	U16
+
+646	负载测相电压C Load phase voltage C	60		0.1V	U16
+
+647	负载测电流A	无效
+Load phase current A no use	R61		0.01A	S16
+
+648	负载测电流B	无效
+Load phase current B no use	R62		0.01A	S16
+
+649	负载测电流C	无效
+Load phase current C no use	R63		0.01A	S16
+
+650	负载侧相࣏率A Load phase power A	R64		1W	S16
+
+651	负载侧相࣏率B Load phase power B	R65		1W	S16
+
+652	负载侧相࣏率C
+Load phase power C	R66		1W	S16
+
+653	负载侧总$࣏࣏率
+Load totalpower	R67		1W	S16
+
+
+654	负载侧总视在࣏率 预留
+Load phase apparent power
+undefine	R68		
+1W	S16
+
+655	负载频率
+Load frequency	R69		0.01Hz	
+656		70			
+657		71			
+658		72			
+659		73			
+660		74			
+
+661	Gen端口的相电压A
+Phase voltage of Gen port A	75		0.1V	
+
+662	Gen端口的相电压B
+Phase voltage of Gen port B	76		0.1V	
+
+663	Gen端口的相电压C
+Phase voltage of Gen port C	77		0.1V	
+
+664	Gen端口的࣏率A
+Phase power of Gen port A	R78		1W	
+ 
+
+665	Gen端口的࣏率B
+Phase power of Gen port B	79		1W	
+
+666	Gen端口的࣏率C
+Phase power of Gen port C	80		1W	
+
+667	Gen端口的总࣏率
+total power of Gen port	81		1W	
+668		82			
+669		83			
+670		84			
+671		85			
+
+672	PV1输入࣏率
+PV1 input power	R86		1W	
+
+673	PV2输入࣏率
+PV2 input power	R87		
+1W	
+
+674	PV3输入࣏率
+PV3 input power	R88		1W	
+
+675	PV4输入࣏率
+PV4 input power	R89		1W	
+
+676	直流电压1
+Dc voltage 1	
+R90	
+[0,65535]	
+0.1V	
+
+677	直流电流1
+Dc current 1	
+R91	
+[0,65535]	
+0.1A	
+
+678	直流电压2
+Dc voltage 2	
+R92	
+[0,65535]	
+0.1V	
+
+679	直流电流2
+Dc current 2	
+R93	
+[0,65535]	
+0.1A	
+
+680	直流电压3
+Dc voltage 3	
+R94	
+[0,65535]	
+0.1V	
+
+681	直流电流3
+Dc current 3	
+R95	
+[0,65535]	
+0.1A	
+
+682	直流电压4
+Dc voltage 4	
+R96	
+[0,65535]	
+0.1V	
+
+683	直流电流4
+Dc current 4	
+R97	
+[0,65535]	
+0.1A	
+	预留				
+	预留				
+	预留				
+1000	电网信息监测方式
+Grid power check mode	R			BIT00:
+0:CT
+1:Meter
+BIT01-BIT15: undefine
+					
+					
+					
+					
+					
+ 
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+ 
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+					
+
+5.3.	03 电池只读;
+
+Addr	Register meaning	R/W	data range	unit	note
+2000-2999 ѪD电池寄ᆈ器
+	电池 ID				
+	圣阳电池					
+
+500	1 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	1 ª 2 ᆇ节				
+
+501	1 ª 3 ᆇ节	R			
+	1 ª 4 ᆇ节				
+
+502	1 ª 5 ᆇ节				
+	1 ª 6 ᆇ节				
+
+503	1 ª 7 ᆇ节				
+	1 ª 8 ᆇ节				
+
+504	1 ª 9 ᆇ节				
+	1 ª 10 ᆇ节				
+
+505	1 ª 11 ᆇ节				
+	1 ª 12 ᆇ节				
+
+506	2 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	2 ª 2 ᆇ节				
+
+507	2 ª 3 ᆇ节	R			
+	2 ª 4 ᆇ节				
+
+508	2 ª 5 ᆇ节				
+	2 ª 6 ᆇ节				
+ 
+
+509	2 ª 7 ᆇ节				
+	2 ª 8 ᆇ节				
+
+510	2 ª 9 ᆇ节				
+	2 ª 10 ᆇ节				
+
+511	2 ª 11 ᆇ节				
+	2 ª 12 ᆇ节				
+
+512	3 ª 1 ᆇ节	R	‘0’-
+‘Z’	‘9’	‘A’-		ASCII ᆇ符
+	3 ª 2 ᆇ节						
+
+513	3 ª 3 ᆇ节	R			
+	3 ª 4 ᆇ节				
+
+514	3 ª 5 ᆇ节				
+	3 ª 6 ᆇ节				
+
+515	3 ª 7 ᆇ节				
+	3 ª 8 ᆇ节				
+
+516	3 ª 9 ᆇ节				
+	3 ª 10 ᆇ节				
+
+517	3 ª 11 ᆇ节				
+	3 ª 12 ᆇ节				
+
+518	4 ª 1 ᆇ节	R	‘0’-
+‘Z’	‘9’	‘A’-		ASCII ᆇ符
+	4 ª 2 ᆇ节						
+
+519	4 ª 3 ᆇ节	R			
+	4 ª 4 ᆇ节				
+
+520	4 ª 5 ᆇ节				
+	4 ª 6 ᆇ节				
+
+521	4 ª 7 ᆇ节				
+	4 ª 8 ᆇ节				
+
+522	4 ª 9 ᆇ节				
+	4 ª 10 ᆇ节				
+
+523	4 ª 11 ᆇ节				
+	4 ª 12 ᆇ节				
+
+524	5 ª 1 ᆇ节	R	‘0’-
+‘Z’	‘9’	‘A’-		ASCII ᆇ符
+	5 ª 2 ᆇ节						
+
+525	5 ª 3 ᆇ节	R			
+	5 ª 4 ᆇ节				
+
+526	5 ª 5 ᆇ节				
+	5 ª 6 ᆇ节				
+
+527	5 ª 7 ᆇ节				
+	5 ª 8 ᆇ节				
+
+528	5 ª 9 ᆇ节				
+	5 ª 10 ᆇ节				
+
+529	5 ª 11 ᆇ节				
+	5 ª 12 ᆇ节				
+530	6 ª 1 ᆇ节	R	‘0’-	‘9’	‘A’-		ASCII ᆇ符
+ 
+	6 ª 2 ᆇ节		‘Z’		
+
+531	6 ª 3 ᆇ节	R			
+	6 ª 4 ᆇ节				
+
+532	6 ª 5 ᆇ节				
+	6 ª 6 ᆇ节				
+
+533	6 ª 7 ᆇ节				
+	6 ª 8 ᆇ节				
+
+534	6 ª 9 ᆇ节				
+	6 ª 10 ᆇ节				
+
+535	6 ª 11 ᆇ节				
+	6 ª 12 ᆇ节				
+
+536	7 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	7 ª 2 ᆇ节				
+
+537	7 ª 3 ᆇ节	R			
+	7 ª 4 ᆇ节				
+
+538	7 ª 5 ᆇ节				
+	7 ª 6 ᆇ节				
+
+539	7 ª 7 ᆇ节				
+	7 ª 8 ᆇ节				
+
+540	7 ª 9 ᆇ节				
+	7 ª 10 ᆇ节				
+
+541	7 ª 11 ᆇ节				
+	7 ª 12 ᆇ节				
+
+542	8 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	8 ª 2 ᆇ节				
+
+543	8 ª 3 ᆇ节	R			
+	8 ª 4 ᆇ节				
+
+544	8 ª 5 ᆇ节				
+	8 ª 6 ᆇ节				
+
+545	8 ª 7 ᆇ节				
+	8 ª 8 ᆇ节				
+
+546	8 ª 9 ᆇ节				
+	8 ª 10 ᆇ节				
+
+547	8 ª 11 ᆇ节				
+	8 ª 12 ᆇ节				
+
+548	9 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	9 ª 2 ᆇ节				
+
+549	9 ª 3 ᆇ节	R			
+	9 ª 4 ᆇ节				
+
+550	9 ª 5 ᆇ节				
+	9 ª 6 ᆇ节				
+
+551	9 ª 7 ᆇ节				
+	9 ª 8 ᆇ节				
+ 
+
+552	9 ª 9 ᆇ节				
+	9 ª 10 ᆇ节				
+
+553	9 ª 11 ᆇ节				
+	9 ª 12 ᆇ节				
+
+554	10 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	10 ª 2 ᆇ节				
+
+555	10 ª 3 ᆇ节	R			
+	10 ª 4 ᆇ节				
+
+556	10 ª 5 ᆇ节				
+	10 ª 6 ᆇ节				
+
+557	10 ª 7 ᆇ节				
+	10 ª 8 ᆇ节				
+
+558	10 ª 9 ᆇ节				
+	10 ª 10 ᆇ节				
+
+559	10 ª 11 ᆇ节				
+	10 ª 12 ᆇ节				
+
+560	11 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	11 ª 2 ᆇ节				
+
+561	11 ª 3 ᆇ节	R			
+	11 ª 4 ᆇ节				
+
+562	11 ª 5 ᆇ节				
+	11 ª 6 ᆇ节				
+
+563	11 ª 7 ᆇ节				
+	11 ª 8 ᆇ节				
+
+564	11 ª 9 ᆇ节				
+	11 ª 10 ᆇ节				
+
+565	11 ª 11 ᆇ节				
+	11 ª 12 ᆇ节				
+
+566	12 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	12 ª 2 ᆇ节				
+
+567	12 ª 3 ᆇ节	R			
+	12 ª 4 ᆇ节				
+
+568	12 ª 5 ᆇ节				
+	12 ª 6 ᆇ节				
+
+569	12 ª 7 ᆇ节				
+	12 ª 8 ᆇ节				
+
+570	12 ª 9 ᆇ节				
+	12 ª 10 ᆇ节				
+
+571	12 ª 11 ᆇ节				
+	12 ª 12 ᆇ节				
+
+572	13 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	13 ª 2 ᆇ节				
+573	13 ª 3 ᆇ节	R			
+ 
+	13 ª 4 ᆇ节				
+
+574	13 ª 5 ᆇ节				
+	13 ª 6 ᆇ节				
+
+575	13 ª 7 ᆇ节				
+	13 ª 8 ᆇ节				
+
+576	13 ª 9 ᆇ节				
+	13 ª 10 ᆇ节				
+
+577	13 ª 11 ᆇ节				
+	13 ª 12 ᆇ节				
+
+578	14 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	14 ª 2 ᆇ节				
+
+579	14 ª 3 ᆇ节	R			
+	14 ª 4 ᆇ节				
+
+580	14 ª 5 ᆇ节				
+	14 ª 6 ᆇ节				
+
+581	14 ª 7 ᆇ节				
+	14 ª 8 ᆇ节				
+
+582	14 ª 9 ᆇ节				
+	14 ª 10 ᆇ节				
+
+583	14 ª 11 ᆇ节				
+	14 ª 12 ᆇ节				
+
+584	15 ª 1 ᆇ节	R	‘0’- ‘9’ ‘A’-
+‘Z’		ASCII ᆇ符
+	15 ª 2 ᆇ节				
+
+585	15 ª 3 ᆇ节	R			
+	15 ª 4 ᆇ节				
+
+586	15 ª 5 ᆇ节				
+	15 ª 6 ᆇ节				
+
+587	15 ª 7 ᆇ节				
+	15 ª 8 ᆇ节				
+
+588	15 ª 9 ᆇ节				
+	15 ª 10 ᆇ节				
+
+589	15 ª 11 ᆇ节				
+	15 ª 12 ᆇ节				
+					
+
+600	
+
+
+
+
+PACK1	Module
+Voltage			0.01V	
+
+601		Module
+Current			0.1A	
+
+602		Temperater
+-AVE				1250 mean 25.0℃
+603		SOC			0.1	
+
+604		Remain
+Capacity			0.1AH	
+ 
+
+605		Total
+Capacity			0.1AH	
+
+606		Charge
+Voltage			0.01V	
+
+607		Charge
+Current			0.1A	
+
+608		Discharge
+Current			0.1A	
+609		Max Cell V			0.01V	
+610		Min Cell V			0.01V	
+
+611		Cycle
+number			1	
+612		Warming			--	
+613		Fault			--	
+
+614	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK2	Module
+Voltage				
+
+615		Module
+Current				
+
+616		Temperater
+-AVE				
+617		SOC				
+
+618		Remain
+Capacity				
+
+619		Total
+Capacity				
+
+620		Charge
+Voltage				
+
+621		Charge
+Current				
+
+622		Discharge
+Current				
+623		Max Cell V				
+624		Min Cell V				
+
+625		Cycle
+number				
+626		Warming				
+627		Fault				
+
+628	
+
+
+PACK3	Module
+Voltage				
+
+629		Module
+Current				
+
+630		Temperater
+-AVE				
+ 
+631		SOC				
+
+632		Remain
+Capacity				
+
+633		Total
+Capacity				
+
+634		Charge
+Voltage				
+
+635		Charge
+Current				
+
+636		Discharge
+Current				
+637		Max Cell V				
+638		Min Cell V				
+
+639		Cycle
+number				
+640		Warming				
+641		Fault				
+
+642	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK4	Module
+Voltage				
+
+643		Module
+Current				
+
+644		Temperater
+-AVE				
+645		SOC				
+
+646		Remain
+Capacity				
+
+647		Total
+Capacity				
+
+648		Charge
+Voltage				
+
+649		Charge
+Current				
+
+650		Discharge
+Current				
+651		Max Cell V				
+652		Min Cell V				
+
+653		Cycle
+number				
+654		Warming				
+655		Fault				
+
+656	
+PACK5	Module
+Voltage				
+657		Module				
+ 
+		Current				
+
+658		Temperater
+-AVE				
+659		SOC				
+
+660		Remain
+Capacity				
+
+661		Total
+Capacity				
+
+662		Charge
+Voltage				
+
+663		Charge
+Current				
+
+664		Discharge
+Current				
+665		Max Cell V				
+666		Min Cell V				
+
+667		Cycle
+number				
+668		Warming				
+669		Fault				
+
+670	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK6	Module
+Voltage				
+
+671		Module
+Current				
+
+672		Temperater
+-AVE				
+673		SOC				
+
+674		Remain
+Capacity				
+
+675		Total
+Capacity				
+
+676		Charge
+Voltage				
+
+677		Charge
+Current				
+
+678		Discharge
+Current				
+679		Max Cell V				
+680		Min Cell V				
+
+681		Cycle
+number				
+682		Warming				
+683		Fault				
+ 
+
+684	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK7	Module
+Voltage				
+
+685		Module
+Current				
+
+686		Temperater
+-AVE				
+687		SOC				
+
+688		Remain
+Capacity				
+
+689		Total
+Capacity				
+
+690		Charge
+Voltage				
+
+691		Charge
+Current				
+
+692		Discharge
+Current				
+693		Max Cell V				
+694		Min Cell V				
+
+695		Cycle
+number				
+696		Warming				
+697		Fault				
+
+698	
+
+
+
+
+
+
+
+
+
+
+
+PACK8	Module
+Voltage				
+
+699		Module
+Current				
+
+700		Temperater
+-AVE				
+701		SOC				
+
+702		Remain
+Capacity				
+
+703		Total
+Capacity				
+
+704		Charge
+Voltage				
+
+705		Charge
+Current				
+
+706		Discharge
+Current				
+707		Max Cell V				
+708		Min Cell V				
+709		Cycle				
+ 
+		number				
+710		Warming				
+711		Fault				
+
+712	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK9	Module
+Voltage				
+
+713		Module
+Current				
+
+714		Temperater
+-AVE				
+715		SOC				
+
+716		Remain
+Capacity				
+
+717		Total
+Capacity				
+
+718		Charge
+Voltage				
+
+719		Charge
+Current				
+
+720		Discharge
+Current				
+721		Max Cell V				
+722		Min Cell V				
+
+723		Cycle
+number				
+724		Warming				
+725		Fault				
+
+726	
+
+
+
+
+
+
+
+
+
+PACK10	Module
+Voltage				
+
+727		Module
+Current				
+
+728		Temperater
+-AVE				
+729		SOC				
+
+730		Remain
+Capacity				
+
+731		Total
+Capacity				
+
+732		Charge
+Voltage				
+
+733		Charge
+Current				
+
+734		Discharge
+Current				
+ 
+735		Max Cell V				
+736		Min Cell V				
+
+737		Cycle
+number				
+738		Warming				
+739		Fault				
+
+740	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK11	Module
+Voltage				
+
+741		Module
+Current				
+
+742		Temperater
+-AVE				
+743		SOC				
+
+744		Remain
+Capacity				
+
+745		Total
+Capacity				
+
+746		Charge
+Voltage				
+
+747		Charge
+Current				
+
+748		Discharge
+Current				
+749		Max Cell V				
+750		Min Cell V				
+
+751		Cycle
+number				
+752		Warming				
+753		Fault				
+
+754	
+
+
+
+
+
+
+
+PACK12	Module
+Voltage				
+
+755		Module
+Current				
+
+756		Temperater
+-AVE				
+757		SOC				
+
+758		Remain
+Capacity				
+
+759		Total
+Capacity				
+
+760		Charge
+Voltage				
+761		Charge				
+ 
+		Current				
+
+762		Discharge
+Current				
+763		Max Cell V				
+764		Min Cell V				
+
+765		Cycle
+number				
+766		Warming				
+767		Fault				
+
+768	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK13	Module
+Voltage				
+
+769		Module
+Current				
+
+770		Temperater
+-AVE				
+771		SOC				
+
+772		Remain
+Capacity				
+
+773		Total
+Capacity				
+
+774		Charge
+Voltage				
+
+775		Charge
+Current				
+
+776		Discharge
+Current				
+777		Max Cell V				
+778		Min Cell V				
+
+779		Cycle
+number				
+780		Warming				
+781		Fault				
+
+782	
+
+
+
+
+
+PACK14	Module
+Voltage				
+
+783		Module
+Current				
+
+784		Temperater
+-AVE				
+785		SOC				
+
+786		Remain
+Capacity				
+
+787		Total
+Capacity				
+ 
+
+788		Charge
+Voltage				
+
+789		Charge
+Current				
+
+790		Discharge
+Current				
+791		Max Cell V				
+792		Min Cell V				
+
+793		Cycle
+number				
+794		Warming				
+795		Fault				
+
+796	
+
+
+
+
+
+
+
+
+
+
+
+
+
+PACK15	Module
+Voltage				
+
+797		Module
+Current				
+
+798		Temperater
+-AVE				
+799		SOC				
+
+800		Remain
+Capacity				
+
+801		Total
+Capacity				
+
+802		Charge
+Voltage				
+
+803		Charge
+Current				
+
+804		Discharge
+Current				
+805		Max Cell V				
+806		Min Cell V				
+
+807		Cycle
+number				
+808		Warming				
+809		Fault				
+
+5.4.	内ᆈ½录表
+
+
+内ᆈ½录表
+Addr.	寄ᆈ器含义	R/W	Range	Unit	note
+1000	逆ਈ器故障信息	R			长度范围是 500
+……		R			
+……		R			
+ 
+1499		R			
+					
+
+
+
+
+5.5.	故障ԓ码
+告警ԓ码
+Error code	Description /描述	Solutions/解ߣ方案
+W01	风扇故障	
+W02	相ƒ错误	
+
+
+故障ԓ码:Fault Code
+Error code	Description /描述	Solutions/解ߣ方案
+
+
+F07	
+DC/DC_Softsart_Fault DC/DC 软起故障	DC/DC softstart fault
+1.	Check the battery fuse;
+2.	Restart and check whether it is in normal;
+3.	Seek help from us, if can’t go back to noarmal state
+
+
+F10	
+AuxPowerBoard_Failure
+辅ࣙ电源故障	Auxiliary power supply failure
+1.	Wait for minutes then check;
+2.	Remove wifi plug or other communicator;
+3.	Seek help from us, if can’t go back to noarmal state
+
+F13	
+Working mode change
+模式࠷换	Inverter work mode changed
+1.	wait for a minute and check;
+2.	Seek help from us, if can't go back to normal state.
+
+
+
+F18	
+
+AC over current fault of hardware
+硬件交流过流	
+AC side over current fault
+1.	Please check whether the backup load power and common load power are within the range;
+2.	Restart and check whether it is in normal;
+3.	Seek help from us, if can not go back to normal state.
+
+
+
+F20	
+DC over current fault of the hardware
+硬件直流过流	DC side over current fault
+1.	Check PV module connect and battery connect;
+2.	Turn off the DC switch and AC switch and then wait one minute,then turn on the DC/AC switch again;
+3.	Seek help from us, if can not go back to normal state.
+
+F22	
+Tz_EmergSStop_Fault
+急停故障(逆ਈ器被䬱定3	
+Tz_EmergSStop_Fault
+Seek help from us,This failure hardly happens.
+
+
+F23	
+AC leakage current is transient over current 瞬时漏电流故障	Leakage current fault
+1.	Check the cable of PV module and inverter;
+2.	Restart inverter;
+3.	Seek help from us, if can not go back to normal state.
+ 
+
+
+
+F24	
+
+DC insulation impedance failure
+方阵绝缘阻抗故障	PV isolation resistance is too low
+1.	Check the connection of PV panels and inverter is firmly and correctly;
+2.	Check whether the PE cable of inverter is connected to ground;
+3.	Seek help from us, if can not go back to normal state.
+
+
+F26	
+The DC busbar is unbalanced
+直流母线нᒣ衡	1.	Please wait for a while and check whether it is normal;
+2.	If still same, and turn off the DC switch and AC switch and wait for one minute and then turn on the DC/AC switch;
+3.	Seek help from us, if can not go back to normal state.
+
+
+F29	
+Parallel_CANBus_Fault
+并联通”故障	This fualt only for inverters working in parallel mode
+1.	Check the parallel setting according to the instructions;
+2.	Check the connection of the CANBus;
+3.	Seek help from us
+
+
+
+F35	
+
+No AC grid
+无市电	No Utility
+1.	Please confirm grid is lost or not;
+2.	Check the grid connection is good or not;
+3.	Check the switch between inverter and grid is on or not;
+4.	Seek help from us, if can not go back to normal state.
+
+
+F41	
+
+Parallel_system_Stop
+并联系统停机故障	In parallel system,due to other inverter faults.
+1.	Wait for minutes then check all inverters in this parallel system;
+2.	If inverter can’t go back to normal state, record fault codes of all
+inverters, then seek help from us.
+
+
+
+F42	
+
+
+AC line low voltage
+线电压过№故障	Grid voltage fault
+1.	Check the AC voltage is in the range of standard voltage in specification;
+2.	Check whether grid AC cables are firmly and correctly connected;
+3.	Seek help from us, if can not go back to normal state.
+
+
+
+F46/F49	
+
+Bcakup_Battery_Fault
+备份电池故障	Backup battery fault.
+1.	Check the battery capacity;
+2.	Check the connection between batteries and inverters;
+3.	If inverter can’t go back to normal after load reduction, seek help
+from us
+
+
+F47	
+
+AC over frequency
+交流过频	Grid frequency out of range
+1.	Check the frequency is in the range of specification or not;
+2.	Check whether AC cables are firmly and correctly connected;
+3.	Seek help from us, if can not go back to normal state.
+
+
+F48	
+
+AC lower frequency
+交流ç频	Grid frequency out of range
+1.	Check the frequency is in the range of specification or not;
+2.	Check whether AC cables are firmly and correctly connected;
+3.	Seek help from us, if can not go back to normal state.
+ 
+
+
+
+F56	
+DC busbar voltage is too low
+母线电压过№	Battery voltage low
+1.	Check whether battery voltage is too low;
+2.	If the battery voltage is too low, using PV or grid to charge the battery;
+3.	Seek help from us, if can not go back to normal state.
+
+F58	BMS	communication fault
+BMS 通”故障	
+
+F63	
+ARC fault
+拉弧故障	1.	ARC fault detection is only for US market;
+2.	Check PV module cable connection and clear the fault;
+3.	Seek help from us, if can not go back to normal state.
+
+
+F64	Heat	sink	high temperature
+failure
+散热器温度过高	Heat sink temperature is too high
+1.	Check whether the work environment temperature is too high;
+2.	Turn off the inverter for 10mins and restart;
+3.	Seek help from us, if can not go back to normal state.

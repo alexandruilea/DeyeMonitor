@@ -27,6 +27,8 @@ class LogicResult(Enum):
     ON_EXPORT_DUMP = "ON: EXPORT DUMP"
     ON_AUTO_START = "ON: AUTO-START (SOC)"
     WAIT_HEADROOM = "Wait: Headroom insufficient"
+    WAIT_LOW_VOLTAGE = "Wait: Low Voltage Block"
+    WAIT_LV_RECOVERY = "Wait: LV Recovery Timer"
     WAIT_CHARGING = "Wait: SOC Charging"
     TAPO_OFFLINE = "HP: TAPO OFFLINE"
 
@@ -45,12 +47,18 @@ class LogicState:
     """State for EMS logic processing."""
     lv_timers: dict[int, Optional[float]] = None  # outlet_id -> timer_start
     runtime_start: dict[int, Optional[float]] = None  # outlet_id -> runtime_start
+    lv_shutdown: dict[int, bool] = None  # outlet_id -> was_shut_down_by_lv
+    lv_recovery_timers: dict[int, Optional[float]] = None  # outlet_id -> recovery_timer_start
     
     def __post_init__(self):
         if self.lv_timers is None:
             self.lv_timers = {}
         if self.runtime_start is None:
             self.runtime_start = {}
+        if self.lv_shutdown is None:
+            self.lv_shutdown = {}
+        if self.lv_recovery_timers is None:
+            self.lv_recovery_timers = {}
     
     def reset_lv_timer(self, outlet_id: int) -> None:
         """Reset the low-voltage timer for an outlet."""
@@ -81,6 +89,35 @@ class LogicState:
         if outlet_id not in self.runtime_start or self.runtime_start[outlet_id] is None:
             return 0.0
         return time.time() - self.runtime_start[outlet_id]
+    
+    def mark_lv_shutdown(self, outlet_id: int) -> None:
+        """Mark that an outlet was shut down due to low voltage."""
+        self.lv_shutdown[outlet_id] = True
+        self.lv_recovery_timers[outlet_id] = None
+    
+    def start_lv_recovery(self, outlet_id: int) -> None:
+        """Start the low-voltage recovery timer for an outlet."""
+        if outlet_id not in self.lv_recovery_timers or self.lv_recovery_timers[outlet_id] is None:
+            self.lv_recovery_timers[outlet_id] = time.time()
+    
+    def reset_lv_recovery(self, outlet_id: int) -> None:
+        """Reset the low-voltage recovery timer for an outlet."""
+        self.lv_recovery_timers[outlet_id] = None
+    
+    def lv_recovery_elapsed(self, outlet_id: int, delay: float) -> bool:
+        """Check if low-voltage recovery timer has exceeded the delay."""
+        if outlet_id not in self.lv_recovery_timers or self.lv_recovery_timers[outlet_id] is None:
+            return False
+        return (time.time() - self.lv_recovery_timers[outlet_id]) >= delay
+    
+    def clear_lv_shutdown(self, outlet_id: int) -> None:
+        """Clear the low-voltage shutdown flag for an outlet."""
+        self.lv_shutdown[outlet_id] = False
+        self.lv_recovery_timers[outlet_id] = None
+    
+    def is_lv_shutdown(self, outlet_id: int) -> bool:
+        """Check if outlet is in low-voltage shutdown state."""
+        return self.lv_shutdown.get(outlet_id, False)
 
 
 class EMSLogic:
@@ -185,6 +222,7 @@ class EMSLogic:
                 if self.state.lv_timer_elapsed(outlet.config.outlet_id, outlet.config.lv_delay):
                     self.tapo.turn_off(outlet.config.outlet_id)
                     self.state.reset_runtime(outlet.config.outlet_id)
+                    self.state.mark_lv_shutdown(outlet.config.outlet_id)  # Mark as LV shutdown
                     return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: {target_voltage}V < {outlet.config.lv_threshold}V"
                 remaining = outlet.config.lv_delay - (time.time() - self.state.lv_timers[outlet.config.outlet_id])
                 return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: Timer {remaining:.0f}s"
@@ -219,6 +257,23 @@ class EMSLogic:
             target_voltage = data.voltages[target_idx]
             export_watts = abs(data.grid_power) if data.grid_power < 0 else 0
             
+            # LOW VOLTAGE RECOVERY CHECK: If outlet was shut down by low voltage, check recovery
+            if self.state.is_lv_shutdown(outlet.config.outlet_id):
+                if target_voltage >= outlet.config.lv_recovery_voltage:
+                    # Voltage is above recovery threshold, start/continue recovery timer
+                    self.state.start_lv_recovery(outlet.config.outlet_id)
+                    if self.state.lv_recovery_elapsed(outlet.config.outlet_id, outlet.config.lv_recovery_delay):
+                        # Recovery complete, clear shutdown flag
+                        self.state.clear_lv_shutdown(outlet.config.outlet_id)
+                    else:
+                        # Still recovering
+                        remaining = outlet.config.lv_recovery_delay - (time.time() - self.state.lv_recovery_timers[outlet.config.outlet_id])
+                        return LogicResult.WAIT_LV_RECOVERY, f"{outlet.config.name}: {remaining:.0f}s ({target_voltage:.1f}V >= {outlet.config.lv_recovery_voltage}V)"
+                else:
+                    # Voltage still too low, reset recovery timer and show blocked status
+                    self.state.reset_lv_recovery(outlet.config.outlet_id)
+                    return LogicResult.WAIT_LV_RECOVERY, f"{outlet.config.name}: {target_voltage:.1f}V < {outlet.config.lv_recovery_voltage}V"
+            
             # Calculate available headroom on the monitored phase
             available_headroom = params.phase_max - data.ups_loads[target_idx]
             
@@ -230,6 +285,21 @@ class EMSLogic:
             total_ups_power = sum(data.ups_loads)
             if total_ups_power + outlet.config.headroom > params.max_ups_total_power:
                 continue  # Would exceed total UPS capacity
+            
+            # VOLTAGE SAFETY CHECK: Do not turn on if voltage is below low voltage threshold
+            # This prevents turning on during low voltage conditions regardless of other triggers
+            if outlet.config.voltage_enabled and target_voltage < outlet.config.lv_threshold:
+                # Check if any trigger would activate if voltage was OK
+                would_activate = False
+                if outlet.config.soc_enabled and data.soc >= outlet.config.start_soc:
+                    would_activate = True
+                if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
+                    would_activate = True
+                
+                # Only show low voltage block if a trigger is actually trying to activate
+                if would_activate:
+                    return LogicResult.WAIT_LOW_VOLTAGE, f"{outlet.config.name}: {target_voltage:.1f}V < {outlet.config.lv_threshold}V (blocking SOC/Export)"
+                continue  # Voltage too low, skip this outlet
             
             # THREE INDEPENDENT TRIGGERS FOR TURNING ON (any one can activate if enabled):
             
@@ -277,6 +347,8 @@ class EMSLogic:
             LogicResult.ON_EXPORT_DUMP: "gold",
             LogicResult.ON_AUTO_START: "#2ECC71",
             LogicResult.WAIT_HEADROOM: "orange",
+            LogicResult.WAIT_LOW_VOLTAGE: "orange",
+            LogicResult.WAIT_LV_RECOVERY: "orange",
             LogicResult.WAIT_CHARGING: "gray",
             LogicResult.TAPO_OFFLINE: "gray",
         }
