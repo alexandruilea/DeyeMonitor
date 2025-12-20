@@ -72,7 +72,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
             self, text=f"{outlet_name} CONFIGURATION",
             font=("Roboto", 13, "bold"),
             text_color="#3498DB"
-        ).grid(row=0, column=0, columnspan=4, pady=(10, 5), sticky="w")
+        ).grid(row=0, column=0, columnspan=4, pady=(10, 5), padx=10, sticky="w")
         
         # Off-Grid Mode toggle (top right)
         self.offgrid_switch = ctk.CTkSwitch(
@@ -80,7 +80,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
             variable=variables["off_grid_mode"],
             font=("Roboto", 10, "bold")
         )
-        self.offgrid_switch.grid(row=0, column=4, columnspan=2, sticky="e", padx=5, pady=(10, 5))
+        self.offgrid_switch.grid(row=0, column=4, columnspan=2, sticky="e", padx=10, pady=(10, 5))
         
         # Row 1: SOC section with toggle
         self.soc_switch = ctk.CTkSwitch(
@@ -88,41 +88,44 @@ class OutletSettingsPanel(ctk.CTkFrame):
             variable=variables["soc_enabled"],
             font=("Roboto", 10, "bold")
         )
-        self.soc_switch.grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.soc_switch.grid(row=1, column=0, sticky="w", padx=10, pady=10)
         
-        self._add_setting_v("Start SOC %", variables["start_soc"], 1, 1)
-        self._add_setting_v("Stop SOC %", variables["stop_soc"], 1, 2)
-        self._add_setting_v("Power W", variables["power"], 1, 3)
+        # On-Grid Always On switch (next to SOC Trigger)
+        self.on_grid_always_on_switch = ctk.CTkSwitch(
+            self, text="On-Grid Always On",
+            variable=variables["on_grid_always_on"],
+            font=("Roboto", 10, "bold")
+        )
+        self.on_grid_always_on_switch.grid(row=1, column=1, sticky="w", padx=0, pady=8)
         
-        # Row 2: Headroom section (applies to all triggers)
+        self._add_setting_v("Start SOC %", variables["start_soc"], 1, 2)
+        self._add_setting_v("Stop SOC %", variables["stop_soc"], 1, 3)
+        self._add_setting_v("Power W", variables["power"], 1, 4)
+        
+        # Row 3: Headroom section (applies to all triggers)
         ctk.CTkLabel(
             self, text="Required Headroom:",
             font=("Roboto", 10, "bold"),
             text_color="#FFA500"
-        ).grid(row=3, column=0, sticky="e", padx=5, pady=5)
+        ).grid(row=3, column=0, sticky="e", padx=5, pady=8)
         
         ctk.CTkEntry(
             self, textvariable=variables["headroom"], 
             width=85, justify="center"
-        ).grid(row=3, column=1, sticky="w", padx=5, pady=5)
-        
-        ctk.CTkLabel(
-            self, text="W",
-            font=("Roboto", 10)
-        ).grid(row=3, column=2, sticky="w", padx=2, pady=5)
+        ).grid(row=3, column=1, sticky="w", padx=5, pady=8)
         
         ctk.CTkLabel(
             self, text="Available:",
             font=("Roboto", 10, "bold"),
             text_color="#FFA500"
-        ).grid(row=3, column=3, sticky="e", padx=5, pady=5)
+        ).grid(row=3, column=2, sticky="e", padx=5, pady=8)
         
         self.lbl_headroom = ctk.CTkLabel(
             self, text="0 W",
             font=("Roboto", 11, "bold"),
             text_color="#2ECC71"
         )
-        self.lbl_headroom.grid(row=3, column=4, columnspan=2, sticky="w", padx=5, pady=5)
+        self.lbl_headroom.grid(row=3, column=3, sticky="w", padx=5, pady=8)
         
         # Row 4: Export section with toggle
         self.export_switch = ctk.CTkSwitch(
@@ -130,7 +133,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
             variable=variables["export_enabled"],
             font=("Roboto", 10, "bold")
         )
-        self.export_switch.grid(row=4, column=0, sticky="w", padx=5, pady=5)
+        self.export_switch.grid(row=4, column=0, sticky="w", padx=10, pady=8)
         
         self._add_setting_h("Min Export:", variables["export_limit"], 4, 1)
         
@@ -140,19 +143,19 @@ class OutletSettingsPanel(ctk.CTkFrame):
             variable=variables["voltage_enabled"],
             font=("Roboto", 10, "bold")
         )
-        self.voltage_switch.grid(row=5, column=0, sticky="w", padx=5, pady=5)
+        self.voltage_switch.grid(row=5, column=0, sticky="w", padx=10, pady=8)
         
         ctk.CTkLabel(
             self, text="Phase:",
             font=("Roboto", 10, "bold")
-        ).grid(row=5, column=1, sticky="e", padx=2, pady=5)
+        ).grid(row=5, column=1, sticky="e", padx=2, pady=8)
         
         self.phase_selector = ctk.CTkSegmentedButton(
             self, values=["L1", "L2", "L3"],
             variable=variables["target_phase"],
             height=24
         )
-        self.phase_selector.grid(row=5, column=2, sticky="w", padx=5, pady=5)
+        self.phase_selector.grid(row=5, column=2, sticky="w", padx=5, pady=8)
         
         self._add_setting_h("High V (ON):", variables["hv_threshold"], 5, 3)
         
@@ -160,14 +163,9 @@ class OutletSettingsPanel(ctk.CTkFrame):
         self._add_setting_h("Low V (OFF):", variables["lv_threshold"], 6, 1)
         self._add_setting_h("LV Delay (s):", variables["lv_delay"], 6, 3)
         
-        # Row 7: Low Voltage Recovery parameters
-        self._add_setting_h("LV Recovery V:", variables["lv_recovery_voltage"], 7, 1)
-        self._add_setting_h("LV Recovery (s):", variables["lv_recovery_delay"], 7, 3)
-        
-        # Divider
-        ctk.CTkFrame(self, height=2, fg_color="#333333").grid(
-            row=8, column=0, columnspan=6, pady=10, sticky="ew"
-        )
+        # Row 7: Low Voltage Recovery parameters (with slight extra spacing)
+        self._add_setting_h("LV Recovery V:", variables["lv_recovery_voltage"], 7, 1, pady=(12, 10))
+        self._add_setting_h("LV Recovery (s):", variables["lv_recovery_delay"], 7, 3, pady=(12, 10))
     
     def update_headroom_status(self, available: int, required: int) -> None:
         """Update headroom status display with color coding."""
@@ -188,13 +186,13 @@ class OutletSettingsPanel(ctk.CTkFrame):
         
         self.logic_widgets.append((lbl, ent))
     
-    def _add_setting_h(self, label: str, var, row: int, col: int) -> None:
+    def _add_setting_h(self, label: str, var, row: int, col: int, pady=8) -> None:
         """Add a horizontal setting (label left of entry)."""
         lbl = ctk.CTkLabel(self, text=label, font=("Roboto", 10, "bold"))
-        lbl.grid(row=row, column=col, sticky="e", padx=2)
+        lbl.grid(row=row, column=col, sticky="e", padx=2, pady=pady)
         
         ent = ctk.CTkEntry(self, textvariable=var, width=75, justify="center")
-        ent.grid(row=row, column=col + 1, sticky="w", padx=2)
+        ent.grid(row=row, column=col + 1, sticky="w", padx=2, pady=pady)
         
         self.logic_widgets.append((lbl, ent))
     
@@ -302,9 +300,13 @@ class StatusHeader(ctk.CTkFrame):
         )
         self.lbl_grid.grid(row=1, column=2)
 
-    def update_status(self, text: str, color: str) -> None:
-        """Update the status label."""
-        self.lbl_status.configure(text=text, text_color=color)
+    def update_status(self, text: str, color: str, is_grid_connected: bool = True) -> None:
+        """Update the status label with grid connection status."""
+        grid_status = "ON-GRID" if is_grid_connected else "OFF-GRID"
+        grid_color = "#2ECC71" if is_grid_connected else "#E74C3C"
+        full_text = f"{text} - {grid_status}"
+        # Use the main color for status, grid status color is shown in the text
+        self.lbl_status.configure(text=full_text, text_color=grid_color)
 
     def update_solar(self, power: int) -> None:
         """Update solar power display."""

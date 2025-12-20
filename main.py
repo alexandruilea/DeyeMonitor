@@ -82,6 +82,7 @@ class DeyeApp(ctk.CTk):
                 "export_enabled": ctk.BooleanVar(value=outlet.config.export_enabled),
                 "export_limit": ctk.StringVar(value=str(outlet.config.export_limit)),
                 "off_grid_mode": ctk.BooleanVar(value=outlet.config.off_grid_mode),
+                "on_grid_always_on": ctk.BooleanVar(value=outlet.config.on_grid_always_on),
             }
 
     def _setup_ui(self) -> None:
@@ -230,15 +231,11 @@ class DeyeApp(ctk.CTk):
 
     def _update_dashboard(self, data: InverterData) -> None:
         """Update the dashboard with new inverter data (called on main thread)."""
-        # Update header
-        self.header.update_status("SYSTEM ONLINE", "#2ECC71")
+        # Update header with grid connection status
+        self.header.update_status("SYSTEM ONLINE", "#2ECC71", data.is_grid_connected)
         self.header.update_solar(data.pv_power)
         self.header.update_battery(data.soc, data.battery_power)
         self.header.update_grid(data.grid_power)
-        
-        # Update off-grid mode switches from inverter status
-        for outlet_id in self.outlet_cfg:
-            self.outlet_cfg[outlet_id]["off_grid_mode"].set(not data.is_grid_connected)
         
         # Update phase displays
         phase_max = int(self._get_safe_value(self.cfg["phase_max"], ems_defaults.phase_max))
@@ -318,6 +315,7 @@ class DeyeApp(ctk.CTk):
                 outlet.config.export_enabled = cfg_vars["export_enabled"].get()
                 outlet.config.export_limit = int(self._get_safe_value(cfg_vars["export_limit"], outlet.config.export_limit))
                 outlet.config.off_grid_mode = cfg_vars["off_grid_mode"].get()
+                outlet.config.on_grid_always_on = cfg_vars["on_grid_always_on"].get()
 
     def _process_logic(self, data: InverterData) -> None:
         """Process EMS logic (called from background thread)."""

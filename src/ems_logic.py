@@ -22,14 +22,17 @@ class LogicResult(Enum):
     ERROR_CRITICAL_CONFIG = "ERR: LOW V must be > CRITICAL V"
     OFF_UNDERVOLTAGE = "OFF: UNDER-VOLTAGE TIMER"
     OFF_BATTERY_LOW = "OFF: BATTERY LOW"
+    OFF_OFF_GRID = "OFF: Off-Grid Mode Disabled"
     RUNNING_OK = "Logic: Running - All OK"
     ON_HV_DUMP = "ON: HV DUMP"
     ON_EXPORT_DUMP = "ON: EXPORT DUMP"
     ON_AUTO_START = "ON: AUTO-START (SOC)"
+    ON_GRID_ALWAYS_ON = "ON: On-Grid Always On"
     WAIT_HEADROOM = "Wait: Headroom insufficient"
     WAIT_LOW_VOLTAGE = "Wait: Low Voltage Block"
     WAIT_LV_RECOVERY = "Wait: LV Recovery Timer"
     WAIT_CHARGING = "Wait: SOC Charging"
+    WAIT_OFF_GRID = "Wait: Off-Grid Blocked"
     TAPO_OFFLINE = "HP: TAPO OFFLINE"
 
 
@@ -212,6 +215,12 @@ class EMSLogic:
             if not outlet.current_state:
                 continue
             
+            # OFF-GRID SHUTDOWN: Turn off if inverter is off-grid and outlet's off-grid mode is disabled
+            if not data.is_grid_connected and not outlet.config.off_grid_mode:
+                self.tapo.turn_off(outlet.config.outlet_id)
+                self.state.reset_runtime(outlet.config.outlet_id)
+                return LogicResult.OFF_OFF_GRID, f"{outlet.config.name}: Off-Grid Mode disabled"
+            
             # Get outlet-specific parameters
             target_idx = self.PHASE_MAP.get(outlet.config.target_phase, 0)
             target_voltage = data.voltages[target_idx]
@@ -229,16 +238,22 @@ class EMSLogic:
             else:
                 self.state.reset_lv_timer(outlet.config.outlet_id)
             
-            # Check SOC
+            # Check SOC - but skip if On-Grid Always On is enabled and grid is connected
             if outlet.config.soc_enabled and data.soc <= outlet.config.stop_soc:
-                self.tapo.turn_off(outlet.config.outlet_id)
-                self.state.reset_runtime(outlet.config.outlet_id)
-                return LogicResult.OFF_BATTERY_LOW, f"{outlet.config.name}: SOC {data.soc}%"
+                # Don't turn off if On-Grid Always On is active
+                if not (outlet.config.on_grid_always_on and data.is_grid_connected):
+                    self.tapo.turn_off(outlet.config.outlet_id)
+                    self.state.reset_runtime(outlet.config.outlet_id)
+                    return LogicResult.OFF_BATTERY_LOW, f"{outlet.config.name}: SOC {data.soc}%"
         
         # Second pass: Try to turn on outlets by priority
         for outlet in sorted_outlets:
             if outlet.current_state:
                 continue  # Already on
+            
+            # OFF-GRID BLOCKING: Skip if inverter is off-grid and outlet's off-grid mode is disabled
+            if not data.is_grid_connected and not outlet.config.off_grid_mode:
+                return LogicResult.WAIT_OFF_GRID, f"{outlet.config.name}: Off-Grid Mode disabled"
             
             # Check if priority 1 has been running for required time before allowing priority 2+
             if outlet.config.priority > 1:
@@ -303,6 +318,11 @@ class EMSLogic:
             
             # THREE INDEPENDENT TRIGGERS FOR TURNING ON (any one can activate if enabled):
             
+            # Trigger 0: On-Grid Always On - if enabled and grid is connected, turn on
+            if outlet.config.on_grid_always_on and data.is_grid_connected:
+                self.tapo.turn_on(outlet.config.outlet_id)
+                return LogicResult.ON_GRID_ALWAYS_ON, f"{outlet.config.name}: Grid connected"
+            
             # Trigger 1: High voltage dump (battery voltage too high) - if voltage trigger enabled
             if outlet.config.voltage_enabled and target_voltage >= outlet.config.hv_threshold:
                 self.tapo.turn_on(outlet.config.outlet_id)
@@ -342,14 +362,17 @@ class EMSLogic:
             LogicResult.ERROR_CRITICAL_CONFIG: "#A569BD",
             LogicResult.OFF_UNDERVOLTAGE: "#E74C3C",
             LogicResult.OFF_BATTERY_LOW: "gray",
+            LogicResult.OFF_OFF_GRID: "#E74C3C",
             LogicResult.RUNNING_OK: "#2ECC71",
             LogicResult.ON_HV_DUMP: "cyan",
             LogicResult.ON_EXPORT_DUMP: "gold",
             LogicResult.ON_AUTO_START: "#2ECC71",
+            LogicResult.ON_GRID_ALWAYS_ON: "#2ECC71",
             LogicResult.WAIT_HEADROOM: "orange",
             LogicResult.WAIT_LOW_VOLTAGE: "orange",
             LogicResult.WAIT_LV_RECOVERY: "orange",
             LogicResult.WAIT_CHARGING: "gray",
+            LogicResult.WAIT_OFF_GRID: "#E74C3C",
             LogicResult.TAPO_OFFLINE: "gray",
         }
         return colors.get(result, "white")
