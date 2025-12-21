@@ -89,7 +89,7 @@ python main.py
 
 ## Building Standalone Executable
 
-You can build a standalone Windows executable that doesn't require Python to be installed.
+You can build a standalone executable that doesn't require Python to be installed.
 
 ### Prerequisites
 
@@ -97,7 +97,7 @@ You can build a standalone Windows executable that doesn't require Python to be 
 pip install pyinstaller
 ```
 
-### Build
+### Windows Build
 
 ```bash
 pyinstaller build.spec --clean
@@ -105,11 +105,56 @@ pyinstaller build.spec --clean
 
 The executable will be created at `dist/DeyeEMS.exe` (~18 MB).
 
-### Running the Executable
+#### Running on Windows
 
 1. Copy `DeyeEMS.exe` from the `dist/` folder to your desired location
 2. Copy your `.env` file to the **same folder** as the executable
 3. Double-click `DeyeEMS.exe` to run
+
+### Linux Build
+
+> **Note:** You must build on Linux to create a Linux executable. PyInstaller does not support cross-compilation.
+
+1. Install system dependencies (Ubuntu/Debian):
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install python3-tk python3-venv
+   ```
+
+2. Create and activate a virtual environment:
+
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. Install Python dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   pip install pyinstaller
+   ```
+
+4. Build the executable:
+   ```bash
+   pyinstaller build.spec --clean
+   ```
+
+The executable will be created at `dist/DeyeEMS` (~20-25 MB).
+
+#### Running on Linux
+
+1. Copy `DeyeEMS` from the `dist/` folder to your desired location
+2. Copy your `.env` file to the **same folder** as the executable
+3. Make it executable (if not already):
+   ```bash
+   chmod +x DeyeEMS
+   ```
+4. Run the application:
+   ```bash
+   ./DeyeEMS
+   ```
 
 > **Note:** The `.env` file must be in the same directory as the executable for configuration to work.
 
