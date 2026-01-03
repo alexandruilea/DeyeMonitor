@@ -4,7 +4,9 @@ UI Components for Deye Inverter EMS application.
 
 import customtkinter as ctk
 from typing import List, Tuple, Callable
-
+# Default charge current limits (Amps)
+DEFAULT_MAX_CHARGE_AMPS = 60
+DEFAULT_GRID_CHARGE_AMPS = 40
 
 class PhaseDisplay(ctk.CTkFrame):
     """Display widget for a single phase (voltage, load bar, power)."""
@@ -479,3 +481,313 @@ class ErrorLogViewer(ctk.CTkScrollableFrame):
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
+
+class TimeScheduleRow(ctk.CTkFrame):
+    """A single row in the time schedule representing one time interval."""
+    
+    def __init__(self, parent, index: int, on_delete: Callable, **kwargs):
+        super().__init__(parent, fg_color="#2B2B2B", corner_radius=5, **kwargs)
+        self.index = index
+        self.on_delete = on_delete
+        
+        self.grid_columnconfigure((1, 2, 3, 4, 5, 6), weight=1)
+        
+        # Enable checkbox
+        self.enabled_var = ctk.BooleanVar(value=True)
+        self.chk_enabled = ctk.CTkCheckBox(
+            self, text="",
+            variable=self.enabled_var,
+            width=20
+        )
+        self.chk_enabled.grid(row=0, column=0, padx=5, pady=8)
+        
+        # Start time
+        ctk.CTkLabel(self, text="From:", font=("Roboto", 10)).grid(row=0, column=1, padx=2)
+        self.start_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
+        self.start_hour.grid(row=0, column=2, padx=2)
+        self.start_hour.insert(0, "00")
+        
+        ctk.CTkLabel(self, text=":", font=("Roboto", 10)).grid(row=0, column=3, padx=0)
+        self.start_min = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="MM")
+        self.start_min.grid(row=0, column=4, padx=2)
+        self.start_min.insert(0, "00")
+        
+        # End time
+        ctk.CTkLabel(self, text="To:", font=("Roboto", 10)).grid(row=0, column=5, padx=2)
+        self.end_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
+        self.end_hour.grid(row=0, column=6, padx=2)
+        self.end_hour.insert(0, "23")
+        
+        ctk.CTkLabel(self, text=":", font=("Roboto", 10)).grid(row=0, column=7, padx=0)
+        self.end_min = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="MM")
+        self.end_min.grid(row=0, column=8, padx=2)
+        self.end_min.insert(0, "59")
+        
+        # Max Charge Amps
+        ctk.CTkLabel(self, text="Max Charge:", font=("Roboto", 10), text_color="#2ECC71").grid(row=0, column=9, padx=(10, 2))
+        self.max_charge = ctk.CTkEntry(self, width=50, justify="center")
+        self.max_charge.grid(row=0, column=10, padx=2)
+        self.max_charge.insert(0, str(DEFAULT_MAX_CHARGE_AMPS))
+        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 5))
+        
+        # Grid Charge Amps
+        ctk.CTkLabel(self, text="Grid Charge:", font=("Roboto", 10), text_color="#3498DB").grid(row=0, column=12, padx=(10, 2))
+        self.grid_charge = ctk.CTkEntry(self, width=50, justify="center")
+        self.grid_charge.grid(row=0, column=13, padx=2)
+        self.grid_charge.insert(0, str(DEFAULT_GRID_CHARGE_AMPS))
+        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 5))
+        
+        # Delete button
+        self.btn_delete = ctk.CTkButton(
+            self, text="✕", width=30, height=24,
+            fg_color="#E74C3C", hover_color="#C0392B",
+            command=lambda: self.on_delete(self.index)
+        )
+        self.btn_delete.grid(row=0, column=15, padx=5)
+    
+    def get_schedule(self) -> dict:
+        """Get the schedule data from this row."""
+        try:
+            return {
+                "enabled": self.enabled_var.get(),
+                "start_hour": int(self.start_hour.get()),
+                "start_min": int(self.start_min.get()),
+                "end_hour": int(self.end_hour.get()),
+                "end_min": int(self.end_min.get()),
+                "max_charge_amps": int(self.max_charge.get()),
+                "grid_charge_amps": int(self.grid_charge.get()),
+            }
+        except ValueError:
+            return None
+    
+    def set_schedule(self, data: dict) -> None:
+        """Set the schedule data for this row."""
+        self.enabled_var.set(data.get("enabled", True))
+        
+        self.start_hour.delete(0, "end")
+        self.start_hour.insert(0, str(data.get("start_hour", 0)).zfill(2))
+        
+        self.start_min.delete(0, "end")
+        self.start_min.insert(0, str(data.get("start_min", 0)).zfill(2))
+        
+        self.end_hour.delete(0, "end")
+        self.end_hour.insert(0, str(data.get("end_hour", 23)).zfill(2))
+        
+        self.end_min.delete(0, "end")
+        self.end_min.insert(0, str(data.get("end_min", 59)).zfill(2))
+        
+        self.max_charge.delete(0, "end")
+        self.max_charge.insert(0, str(data.get("max_charge_amps", DEFAULT_MAX_CHARGE_AMPS)))
+        
+        self.grid_charge.delete(0, "end")
+        self.grid_charge.insert(0, str(data.get("grid_charge_amps", DEFAULT_GRID_CHARGE_AMPS)))
+
+
+class TimeSchedulePanel(ctk.CTkFrame):
+    """Panel for configuring time-based charge schedules."""
+    
+    def __init__(self, parent, on_schedule_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
+        self.on_schedule_change = on_schedule_change
+        self.schedule_rows: List[TimeScheduleRow] = []
+        
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(
+            header_frame, text="⏰ CHARGE SCHEDULE",
+            font=("Roboto", 14, "bold"),
+            text_color="#F39C12"
+        ).grid(row=0, column=0, sticky="w")
+        
+        # Enable/Disable switch
+        self.enabled_var = ctk.BooleanVar(value=False)
+        self.enable_switch = ctk.CTkSwitch(
+            header_frame, text="Enable Schedule",
+            variable=self.enabled_var,
+            font=("Roboto", 11, "bold"),
+            command=self._on_enable_toggle
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        
+        # Status label
+        self.lbl_status = ctk.CTkLabel(
+            header_frame, text="Disabled",
+            font=("Roboto", 11),
+            text_color="gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        
+        # Default values frame (shown when disabled)
+        self.defaults_frame = ctk.CTkFrame(header_frame, fg_color="#2B2B2B", corner_radius=5)
+        self.defaults_frame.grid(row=0, column=3, sticky="e", padx=5)
+        
+        ctk.CTkLabel(
+            self.defaults_frame, text="Defaults:",
+            font=("Roboto", 10, "bold"),
+            text_color="#888888"
+        ).grid(row=0, column=0, padx=(8, 5), pady=5)
+        
+        ctk.CTkLabel(
+            self.defaults_frame, text="Max:",
+            font=("Roboto", 10),
+            text_color="#2ECC71"
+        ).grid(row=0, column=1, padx=2, pady=5)
+        
+        self.default_max_charge = ctk.CTkEntry(self.defaults_frame, width=45, justify="center")
+        self.default_max_charge.grid(row=0, column=2, padx=2, pady=5)
+        self.default_max_charge.insert(0, str(DEFAULT_MAX_CHARGE_AMPS))
+        
+        ctk.CTkLabel(
+            self.defaults_frame, text="A",
+            font=("Roboto", 10)
+        ).grid(row=0, column=3, padx=(0, 8), pady=5)
+        
+        ctk.CTkLabel(
+            self.defaults_frame, text="Grid:",
+            font=("Roboto", 10),
+            text_color="#3498DB"
+        ).grid(row=0, column=4, padx=2, pady=5)
+        
+        self.default_grid_charge = ctk.CTkEntry(self.defaults_frame, width=45, justify="center")
+        self.default_grid_charge.grid(row=0, column=5, padx=2, pady=5)
+        self.default_grid_charge.insert(0, str(DEFAULT_GRID_CHARGE_AMPS))
+        
+        ctk.CTkLabel(
+            self.defaults_frame, text="A",
+            font=("Roboto", 10)
+        ).grid(row=0, column=6, padx=(0, 8), pady=5)
+        
+        # Add button
+        self.btn_add = ctk.CTkButton(
+            header_frame, text="+ Add Time Slot",
+            width=120, height=28,
+            fg_color="#27AE60", hover_color="#1E8449",
+            command=self._add_row
+        )
+        self.btn_add.grid(row=0, column=4, sticky="e", padx=(10, 0))
+        
+        # Container for schedule rows
+        self.rows_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.rows_container.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        self.rows_container.grid_columnconfigure(0, weight=1)
+        
+        # Info label
+        self.lbl_info = ctk.CTkLabel(
+            self, text="Add time slots to automatically adjust charge settings during specific hours.",
+            font=("Roboto", 10),
+            text_color="#888888"
+        )
+        self.lbl_info.grid(row=2, column=0, pady=(5, 10))
+        
+        # Add a default row (00:00 to 23:59)
+        self._add_row()
+    
+    def _on_enable_toggle(self) -> None:
+        """Handle enable/disable toggle."""
+        if self.enabled_var.get():
+            self.lbl_status.configure(text="Active", text_color="#2ECC71")
+        else:
+            self.lbl_status.configure(text="Disabled", text_color="gray")
+        
+        if self.on_schedule_change:
+            self.on_schedule_change()
+    
+    def _add_row(self) -> None:
+        """Add a new schedule row."""
+        index = len(self.schedule_rows)
+        row = TimeScheduleRow(self.rows_container, index, self._delete_row)
+        row.grid(row=index, column=0, sticky="ew", pady=3)
+        self.schedule_rows.append(row)
+        
+        # Hide info label when we have rows
+        if self.schedule_rows:
+            self.lbl_info.grid_forget()
+    
+    def _delete_row(self, index: int) -> None:
+        """Delete a schedule row."""
+        if 0 <= index < len(self.schedule_rows):
+            self.schedule_rows[index].destroy()
+            self.schedule_rows.pop(index)
+            
+            # Re-index remaining rows
+            for i, row in enumerate(self.schedule_rows):
+                row.index = i
+                row.grid(row=i, column=0, sticky="ew", pady=3)
+        
+        # Show info label if no rows
+        if not self.schedule_rows:
+            self.lbl_info.grid(row=2, column=0, pady=(5, 10))
+    
+    def is_enabled(self) -> bool:
+        """Check if scheduling is enabled."""
+        return self.enabled_var.get()
+    
+    def get_active_schedule(self) -> dict:
+        """
+        Get the currently active schedule based on current time.
+        Returns None if no schedule is active or scheduling is disabled.
+        """
+        if not self.enabled_var.get():
+            return None
+        
+        import datetime
+        now = datetime.datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+        
+        for row in self.schedule_rows:
+            schedule = row.get_schedule()
+            if schedule is None or not schedule["enabled"]:
+                continue
+            
+            start_minutes = schedule["start_hour"] * 60 + schedule["start_min"]
+            end_minutes = schedule["end_hour"] * 60 + schedule["end_min"]
+            
+            # Handle overnight schedules (e.g., 22:00 to 06:00)
+            if start_minutes <= end_minutes:
+                # Normal case: same day
+                if start_minutes <= current_minutes < end_minutes:
+                    return schedule
+            else:
+                # Overnight case
+                if current_minutes >= start_minutes or current_minutes < end_minutes:
+                    return schedule
+        
+        return None
+    
+    def get_all_schedules(self) -> List[dict]:
+        """Get all schedule configurations."""
+        schedules = []
+        for row in self.schedule_rows:
+            schedule = row.get_schedule()
+            if schedule:
+                schedules.append(schedule)
+        return schedules
+    
+    def get_default_values(self) -> dict:
+        """Get the default charge values to apply when no schedule is active."""
+        try:
+            return {
+                "max_charge_amps": int(self.default_max_charge.get()),
+                "grid_charge_amps": int(self.default_grid_charge.get()),
+            }
+        except ValueError:
+            return {"max_charge_amps": 60, "grid_charge_amps": 40}
+    
+    def update_status(self, active_schedule: dict = None) -> None:
+        """Update the status label to show current state."""
+        if not self.enabled_var.get():
+            self.lbl_status.configure(text="Disabled", text_color="gray")
+        elif active_schedule:
+            start = f"{active_schedule['start_hour']:02d}:{active_schedule['start_min']:02d}"
+            end = f"{active_schedule['end_hour']:02d}:{active_schedule['end_min']:02d}"
+            self.lbl_status.configure(
+                text=f"Active: {start}-{end} | Max:{active_schedule['max_charge_amps']}A Grid:{active_schedule['grid_charge_amps']}A",
+                text_color="#2ECC71"
+            )
+        else:
+            self.lbl_status.configure(text="No active slot (using defaults)", text_color="#F39C12")

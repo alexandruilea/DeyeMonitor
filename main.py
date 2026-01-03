@@ -20,6 +20,7 @@ from src.ui_components import (
     OutletButton,
     OutletSettingsPanel,
     ErrorLogViewer,
+    TimeSchedulePanel,
 )
 
 
@@ -47,6 +48,9 @@ class DeyeApp(ctk.CTk):
         
         # Setup UI
         self._setup_ui()
+        
+        # Read initial charge settings from inverter
+        self._read_initial_charge_settings()
         
         # Start data polling thread
         self._running = True
@@ -106,14 +110,42 @@ class DeyeApp(ctk.CTk):
             phase.grid(row=i + 2, column=0, columnspan=3, padx=20, pady=5, sticky="ew")
             self.phases[name] = phase
         
+        # Stats row (Total UPS power + Current charge settings)
+        stats_frame = ctk.CTkFrame(self.scrollable, fg_color="transparent")
+        stats_frame.grid(row=5, column=0, columnspan=3, pady=5, sticky="ew")
+        stats_frame.grid_columnconfigure((0, 1), weight=1)
+        
         # Total UPS power display
         self.lbl_total_power = ctk.CTkLabel(
-            self.scrollable,
+            stats_frame,
             text="Total UPS: 0 W / 16000 W",
             font=("Roboto", 14, "bold"),
             text_color="#FFA500"
         )
-        self.lbl_total_power.grid(row=5, column=0, columnspan=3, pady=5)
+        self.lbl_total_power.grid(row=0, column=0, padx=10, sticky="w")
+        
+        # Current charge settings display
+        self.lbl_charge_settings = ctk.CTkLabel(
+            stats_frame,
+            text="Charge Limits: Max: --A | Grid: --A",
+            font=("Roboto", 14, "bold"),
+            text_color="#3498DB"
+        )
+        self.lbl_charge_settings.grid(row=0, column=1, padx=10, sticky="e")
+        
+        # Time Schedule Panel (for charge scheduling)
+        self.schedule_panel = TimeSchedulePanel(
+            self.scrollable,
+            on_schedule_change=self._on_schedule_change
+        )
+        self.schedule_panel.grid(row=6, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        
+        # Track last applied schedule to avoid redundant writes
+        self._last_applied_schedule = None
+        
+        # Track current charge settings for display
+        self._current_max_charge = None
+        self._current_grid_charge = None
         
         # Global Settings panel
         self.settings = SettingsPanel(
@@ -121,14 +153,14 @@ class DeyeApp(ctk.CTk):
             self.cfg,
             on_manual_toggle=self._on_manual_toggle
         )
-        self.settings.grid(row=5, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+        self.settings.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 6
+        current_row = 8
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -164,10 +196,104 @@ class DeyeApp(ctk.CTk):
         # Error log viewer
         self.log_viewer = ErrorLogViewer(self.scrollable)
         self.log_viewer.grid(row=current_row, column=0, columnspan=3, sticky="nsew", padx=20, pady=10)
+
+    def _read_initial_charge_settings(self) -> None:
+        """Read and display initial charge settings from the inverter."""
+        print("[INIT] Reading initial charge settings from inverter...")
+        max_charge, grid_charge = self.inverter.read_charge_settings()
+        
+        if max_charge is not None and grid_charge is not None:
+            print(f"[INIT] Current settings: Max={max_charge}A, Grid={grid_charge}A")
+            self._current_max_charge = max_charge
+            self._current_grid_charge = grid_charge
+            self._update_charge_display()
+        else:
+            print("[INIT] Could not read charge settings from inverter")
     
     def _log_error(self, message: str) -> None:
         """Log error message to UI (called from background thread)."""
         self.after(0, lambda: self.log_viewer.add_log(message))
+
+    def _on_schedule_change(self) -> None:
+        """Handle schedule enable/disable toggle."""
+        # Reset last applied schedule so it will be re-evaluated
+        self._last_applied_schedule = None
+        
+        # If schedule was just disabled, apply defaults
+        if not self.schedule_panel.is_enabled():
+            defaults = self.schedule_panel.get_default_values()
+            print(f"[SCHEDULE] Disabled - applying defaults: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
+            success1 = self.inverter.set_max_charge_current(defaults["max_charge_amps"])
+            success2 = self.inverter.set_grid_charge_current(defaults["grid_charge_amps"])
+            if success1 and success2:
+                self._current_max_charge = defaults["max_charge_amps"]
+                self._current_grid_charge = defaults["grid_charge_amps"]
+                self._update_charge_display()
+            self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
+
+    def _process_schedule(self) -> None:
+        """Process time-based charge schedule and apply settings if needed."""
+        if not self.schedule_panel.is_enabled():
+            # Schedule is disabled, nothing to do
+            self.after(0, lambda: self.schedule_panel.update_status(None))
+            return
+        
+        active_schedule = self.schedule_panel.get_active_schedule()
+        
+        # Update UI status
+        self.after(0, lambda: self.schedule_panel.update_status(active_schedule))
+        
+        # Determine what settings to apply
+        if active_schedule is not None:
+            target_max = active_schedule["max_charge_amps"]
+            target_grid = active_schedule["grid_charge_amps"]
+            schedule_key = (
+                active_schedule["start_hour"],
+                active_schedule["start_min"],
+                active_schedule["end_hour"],
+                active_schedule["end_min"],
+                target_max,
+                target_grid,
+            )
+        else:
+            # No active time slot - use defaults
+            defaults = self.schedule_panel.get_default_values()
+            target_max = defaults["max_charge_amps"]
+            target_grid = defaults["grid_charge_amps"]
+            schedule_key = ("default", target_max, target_grid)
+        
+        # Only apply if settings changed
+        if self._last_applied_schedule == schedule_key:
+            return
+        
+        # Apply the settings
+        if active_schedule:
+            print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A")
+        else:
+            print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A")
+        
+        success1 = self.inverter.set_max_charge_current(target_max)
+        success2 = self.inverter.set_grid_charge_current(target_grid)
+        
+        if success1 and success2:
+            self._last_applied_schedule = schedule_key
+            self._current_max_charge = target_max
+            self._current_grid_charge = target_grid
+            self._update_charge_display()
+            if active_schedule:
+                self._log_error(f"Schedule applied: Max={target_max}A, Grid={target_grid}A")
+            else:
+                self._log_error(f"Defaults applied: Max={target_max}A, Grid={target_grid}A")
+        else:
+            self._log_error(f"Failed to apply charge settings")
+
+    def _update_charge_display(self) -> None:
+        """Update the charge settings display label."""
+        max_str = f"{self._current_max_charge}A" if self._current_max_charge is not None else "--A"
+        grid_str = f"{self._current_grid_charge}A" if self._current_grid_charge is not None else "--A"
+        self.after(0, lambda: self.lbl_charge_settings.configure(
+            text=f"Charge Limits: Max: {max_str} | Grid: {grid_str}"
+        ))
 
     def _on_manual_toggle(self) -> None:
         """Handle manual mode toggle."""
@@ -224,6 +350,8 @@ class DeyeApp(ctk.CTk):
             if data is not None:
                 self.after(0, self._update_dashboard, data)
                 self._process_logic(data)
+                # Process time-based charge schedule
+                self._process_schedule()
             else:
                 self.after(0, lambda: self.header.update_status("CONNECTING...", "orange"))
             
