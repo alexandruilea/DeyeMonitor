@@ -8,7 +8,7 @@ import time
 import threading
 import customtkinter as ctk
 
-from src.config import ems_defaults
+from src.config import ems_defaults, deye_config
 from src.deye_inverter import DeyeInverter, InverterData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
@@ -21,6 +21,7 @@ from src.ui_components import (
     OutletSettingsPanel,
     ErrorLogViewer,
     TimeSchedulePanel,
+    OverpowerProtectionPanel,
 )
 
 
@@ -32,7 +33,7 @@ class DeyeApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Deye Inverter EMS Pro")
-        self.geometry("900x1400")
+        self.geometry("1050x1400")
         ctk.set_appearance_mode("dark")
         
         # Initialize hardware managers
@@ -45,6 +46,11 @@ class DeyeApp(ctk.CTk):
         
         # Track pending outlet state changes per outlet
         self._pending_outlet_states = {}  # outlet_id -> pending_state
+        
+        # Overpower protection state
+        self._protection_boost_amps = 0  # Current boost amount added on top of schedule
+        self._protection_active = False  # Whether protection is currently boosting
+        self._last_protection_adjustment = 0.0  # Timestamp of last charge adjustment
         
         # Setup UI
         self._setup_ui()
@@ -140,6 +146,13 @@ class DeyeApp(ctk.CTk):
         )
         self.schedule_panel.grid(row=6, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
+        # Overpower Protection Panel
+        self.protection_panel = OverpowerProtectionPanel(
+            self.scrollable,
+            on_settings_change=self._on_protection_change
+        )
+        self.protection_panel.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        
         # Track last applied schedule to avoid redundant writes
         self._last_applied_schedule = None
         
@@ -153,14 +166,14 @@ class DeyeApp(ctk.CTk):
             self.cfg,
             on_manual_toggle=self._on_manual_toggle
         )
-        self.settings.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+        self.settings.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 8
+        current_row = 9
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -209,6 +222,12 @@ class DeyeApp(ctk.CTk):
             self._update_charge_display()
         else:
             print("[INIT] Could not read charge settings from inverter")
+        
+        # Read max sell power for protection panel
+        max_sell = self.inverter.read_max_sell_power()
+        if max_sell is not None:
+            print(f"[INIT] Max sell power from inverter: {max_sell}W")
+            self.after(0, lambda: self.protection_panel.set_max_sell_power(max_sell))
     
     def _log_error(self, message: str) -> None:
         """Log error message to UI (called from background thread)."""
@@ -295,6 +314,125 @@ class DeyeApp(ctk.CTk):
             text=f"Charge Limits: Max: {max_str} | Grid: {grid_str}"
         ))
 
+    def _on_protection_change(self) -> None:
+        """Handle protection settings change."""
+        if not self.protection_panel.is_enabled():
+            # Reset boost when protection is disabled
+            if self._protection_boost_amps > 0:
+                self._protection_boost_amps = 0
+                self._protection_active = False
+                # Force schedule to re-apply base values
+                self._last_applied_schedule = None
+                print("[PROTECTION] Disabled - clearing boost")
+
+    def _get_base_charge_amps(self) -> int:
+        """Get the base charge amps from schedule or defaults (before protection boost)."""
+        if self.schedule_panel.is_enabled():
+            active_schedule = self.schedule_panel.get_active_schedule()
+            if active_schedule:
+                return active_schedule["max_charge_amps"]
+        # Use defaults
+        defaults = self.schedule_panel.get_default_values()
+        return defaults["max_charge_amps"]
+
+    def _process_overpower_protection(self, data) -> None:
+        """
+        Process overpower protection logic.
+        
+        Increases charging to absorb excess power when:
+        - Export power exceeds threshold percentage of max sell power
+        - Any phase voltage exceeds warning threshold
+        
+        Decreases charging (removes boost) when:
+        - Export power drops below recovery threshold
+        - All phase voltages are below recovery threshold
+        
+        Respects adjustment_interval to allow system to stabilize between changes.
+        """
+        if not self.protection_panel.is_enabled():
+            self.after(0, lambda: self.protection_panel.update_protection_state(False, 0))
+            return
+        
+        settings = self.protection_panel.get_settings()
+        
+        # Get current export power (negative grid_power = exporting)
+        export_power = abs(min(0, data.grid_power))  # Only count exports (negative values)
+        max_sell = settings["max_sell_power"]
+        max_voltage = max(data.voltages)
+        
+        # Update state display
+        self.after(0, lambda: self.protection_panel.update_state_display(
+            export_power, max_sell, max_voltage
+        ))
+        
+        # Check if enough time has passed since last adjustment
+        adjustment_interval = settings.get("adjustment_interval", 10)
+        current_time = time.time()
+        if current_time - self._last_protection_adjustment < adjustment_interval:
+            # Not enough time passed, just update display and return
+            self.after(0, lambda: self.protection_panel.update_protection_state(
+                self._protection_active, self._protection_boost_amps
+            ))
+            return
+        
+        # Calculate thresholds
+        power_warning_threshold = max_sell * settings["power_threshold_pct"] / 100
+        power_recovery_threshold = max_sell * settings["recovery_threshold_pct"] / 100
+        voltage_warning = settings["voltage_warning"]
+        voltage_recovery = settings["voltage_recovery"]
+        charge_step = settings["charge_step"]
+        
+        # Determine if we need to boost or reduce
+        needs_boost = (export_power >= power_warning_threshold) or (max_voltage >= voltage_warning)
+        can_recover = (export_power < power_recovery_threshold) and (max_voltage < voltage_recovery)
+        
+        base_charge = self._get_base_charge_amps()
+        max_charge_limit = deye_config.max_charge_amps_limit
+        
+        if needs_boost:
+            # Increase boost by one step
+            new_boost = min(self._protection_boost_amps + charge_step, max_charge_limit - base_charge)
+            if new_boost != self._protection_boost_amps:
+                self._protection_boost_amps = new_boost
+                self._protection_active = True
+                self._last_protection_adjustment = current_time
+                target_charge = base_charge + self._protection_boost_amps
+                
+                print(f"[PROTECTION] BOOST: Base={base_charge}A + Boost={self._protection_boost_amps}A = {target_charge}A "
+                      f"(Export={export_power}W/{max_sell}W, MaxV={max_voltage:.1f}V)")
+                
+                if self.inverter.set_max_charge_current(target_charge):
+                    self._current_max_charge = target_charge
+                    self._update_charge_display()
+                    self._log_error(f"Protection: Boosting to {target_charge}A (export={export_power}W, voltage={max_voltage:.1f}V)")
+                    
+        elif can_recover and self._protection_boost_amps > 0:
+            # Reduce boost by one step
+            new_boost = max(0, self._protection_boost_amps - charge_step)
+            if new_boost != self._protection_boost_amps:
+                self._protection_boost_amps = new_boost
+                self._last_protection_adjustment = current_time
+                target_charge = base_charge + self._protection_boost_amps
+                
+                if self._protection_boost_amps == 0:
+                    self._protection_active = False
+                    print(f"[PROTECTION] RECOVERED: Back to base {target_charge}A")
+                else:
+                    print(f"[PROTECTION] Reducing boost to +{self._protection_boost_amps}A = {target_charge}A")
+                
+                if self.inverter.set_max_charge_current(target_charge):
+                    self._current_max_charge = target_charge
+                    self._update_charge_display()
+                    if self._protection_boost_amps == 0:
+                        self._log_error(f"Protection: Recovered, back to {target_charge}A")
+                    else:
+                        self._log_error(f"Protection: Reduced to {target_charge}A")
+        
+        # Update protection state display
+        self.after(0, lambda: self.protection_panel.update_protection_state(
+            self._protection_active, self._protection_boost_amps
+        ))
+
     def _on_manual_toggle(self) -> None:
         """Handle manual mode toggle."""
         is_manual = self.cfg["manual_mode"].get()
@@ -352,6 +490,8 @@ class DeyeApp(ctk.CTk):
                 self._process_logic(data)
                 # Process time-based charge schedule
                 self._process_schedule()
+                # Process overpower protection (may override schedule charge values)
+                self._process_overpower_protection(data)
             else:
                 self.after(0, lambda: self.header.update_status("CONNECTING...", "orange"))
             

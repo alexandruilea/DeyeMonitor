@@ -33,6 +33,17 @@ class DeyeConfig:
     logger_serial: int = field(default_factory=lambda: int(os.getenv("DEYE_LOGGER_SERIAL", "3127036880")))
     port: int = field(default_factory=lambda: int(os.getenv("DEYE_PORT", "8899")))
     model: str = field(default_factory=lambda: os.getenv("DEYE_MODEL", "SUN-12K-SG04LP3-EU"))
+    # Write control registers (model-specific)
+    reg_max_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_MAX_CHARGE_AMPS", "108")))
+    reg_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_MAX_DISCHARGE_AMPS", "109")))
+    reg_grid_charge_enable: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_GRID_CHARGE_ENABLE", "130")))
+    reg_grid_charge_current: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_GRID_CHARGE_CURRENT", "128")))
+    reg_solar_sell_slot1: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_SOLAR_SELL_SLOT1", "145")))
+    reg_grid_charge_slot1: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_GRID_CHARGE_SLOT1", "172")))
+    reg_charge_target_soc: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_CHARGE_TARGET_SOC", "166")))
+    reg_max_grid_power: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_MAX_GRID_POWER", "143")))
+    reg_max_solar_sell_power: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_MAX_SOLAR_SELL_POWER", "340")))
+    max_charge_amps_limit: int = field(default_factory=lambda: int(os.getenv("DEYE_MAX_CHARGE_AMPS_LIMIT", "185")))
 
 
 @dataclass
@@ -143,7 +154,20 @@ class EMSDefaults:
     max_ups_total_power: int = 16000  # Maximum UPS/Backup port output across all phases
 
 
+@dataclass
+class OverpowerProtectionConfig:
+    """Configuration for overpower/overvoltage protection."""
+    voltage_warning: float = field(default_factory=lambda: float(os.getenv("PROTECTION_VOLTAGE_WARNING", "251.5")))
+    voltage_recovery: float = field(default_factory=lambda: float(os.getenv("PROTECTION_VOLTAGE_RECOVERY", "249.0")))
+    charge_step: int = field(default_factory=lambda: int(os.getenv("PROTECTION_CHARGE_STEP", "10")))
+    max_sell_power: int = field(default_factory=lambda: int(os.getenv("PROTECTION_MAX_SELL_POWER", "8000")))
+    power_threshold_pct: int = field(default_factory=lambda: int(os.getenv("PROTECTION_POWER_THRESHOLD_PCT", "95")))
+    recovery_threshold_pct: int = field(default_factory=lambda: int(os.getenv("PROTECTION_RECOVERY_THRESHOLD_PCT", "85")))
+    adjustment_interval: int = field(default_factory=lambda: int(os.getenv("PROTECTION_ADJUSTMENT_INTERVAL", "10")))
+
+
 # Global config instances
 deye_config = DeyeConfig()
 outlet_configs = load_outlet_configs()
 ems_defaults = EMSDefaults()
+protection_config = OverpowerProtectionConfig()

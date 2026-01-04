@@ -36,15 +36,7 @@ class DeyeInverter:
     STATUS_REGISTER_START = 500  # Running state, AC relay status
     STATUS_REGISTER_COUNT = 53  # Read up to register 552 for AC relay status
     
-    # Write control registers
-    REG_MODBUS_WRITE_ENABLE = 1100  # Set to 1 to enable writing, 0 to disable
-    REG_MAX_CHARGE_AMPS = 108       # Max charging current from any source (0-185A)
-    REG_MAX_DISCHARGE_AMPS = 109    # Max discharging current (0-185A)
-    REG_GRID_CHARGE_ENABLE = 130    # Enable grid charging (1=enable, 0=disable)
-    REG_GRID_CHARGE_CURRENT = 128   # Grid charge battery current (0-185A)
-    REG_SOLAR_SELL_SLOT1 = 145      # Solar sell for time slot 1 (1=enable, 0=disable)
-    REG_GRID_CHARGE_SLOT1 = 172     # Grid charge for time slot 1 (1=enable, 0=disable)
-    REG_CHARGE_TARGET_SOC = 166     # Target SOC for charging (%)
+    # Write control registers are loaded from config (deye_config.reg_*)
     
     def __init__(self):
         self._modbus: Optional[PySolarmanV5] = None
@@ -125,14 +117,32 @@ class DeyeInverter:
             
             # Read register 108 (max charge amps) and 128 (grid charge amps)
             # They're not contiguous, so read separately
-            max_charge = self._modbus.read_holding_registers(self.REG_MAX_CHARGE_AMPS, 1)
-            grid_charge = self._modbus.read_holding_registers(self.REG_GRID_CHARGE_CURRENT, 1)
+            max_charge = self._modbus.read_holding_registers(deye_config.reg_max_charge_amps, 1)
+            grid_charge = self._modbus.read_holding_registers(deye_config.reg_grid_charge_current, 1)
             
             return max_charge[0], grid_charge[0]
             
         except Exception as e:
             print(f"[READ] Failed to read charge settings: {e}")
             return None, None
+
+    def read_max_sell_power(self) -> int:
+        """
+        Read the maximum solar sell power limit from the inverter.
+        
+        Returns:
+            Max sell power in Watts, or None if read failed.
+        """
+        try:
+            if not self._connect():
+                return None
+            
+            result = self._modbus.read_holding_registers(deye_config.reg_max_solar_sell_power, 1)
+            return result[0] if result else None
+            
+        except Exception as e:
+            print(f"[READ] Failed to read max sell power: {e}")
+            return None
 
     def disconnect(self) -> None:
         """Disconnect from the inverter."""
@@ -143,7 +153,7 @@ class DeyeInverter:
                 pass
             self._modbus = None
 
-    def _write_register(self, register: int, value: int) -> bool:
+    def _write_register(self, register: int, value: int, retries: int = 3) -> bool:
         """
         Write a single value to a holding register.
         Uses write_multiple_holding_registers as per deye-controller library.
@@ -151,69 +161,47 @@ class DeyeInverter:
         Args:
             register: Register address to write to
             value: Value to write (16-bit unsigned)
+            retries: Number of retry attempts for transient errors
             
         Returns:
             True if write was successful, False otherwise
         """
         import time
-        try:
-            if not self._connect():
-                print(f"  [WRITE] Failed to connect")
-                return False
-            print(f"  [WRITE] Writing {value} to register {register}...")
-            # Use write_multiple_holding_registers (function code 16) instead of 
-            # write_holding_register (function code 6) - this is what deye-controller uses
-            self._modbus.write_multiple_holding_registers(register, [value])
-            print(f"  [WRITE] Success!")
-            return True
-        except Exception as e:
-            error_msg = str(e)
-            # AcknowledgeError means the device accepted but needs time - treat as success
-            if "AcknowledgeError" in error_msg or "Acknowledge" in error_msg:
-                print(f"  [WRITE] Acknowledged (device processing) - waiting...")
-                time.sleep(0.5)  # Give device time to process
-                return True
-            print(f"  [WRITE] Exception: {type(e).__name__}: {e}")
-            return False
-
-    def _enable_modbus_write(self) -> bool:
-        """Enable modbus writing by setting register 1100 to 1."""
-        return self._write_register(self.REG_MODBUS_WRITE_ENABLE, 1)
-
-    def _disable_modbus_write(self) -> bool:
-        """Disable modbus writing by setting register 1100 to 0."""
-        return self._write_register(self.REG_MODBUS_WRITE_ENABLE, 0)
-
-    def write_register_safe(self, register: int, value: int) -> bool:
-        """
-        Write a value to a register with proper enable/disable sequence.
         
-        Enables modbus writing, writes the value, then disables writing.
-        
-        Args:
-            register: Register address to write to
-            value: Value to write
-            
-        Returns:
-            True if all operations succeeded, False otherwise
-        """
-        try:
-            if not self._enable_modbus_write():
-                return False
-            
-            success = self._write_register(register, value)
-            
-            # Always try to disable writing, even if the write failed
-            self._disable_modbus_write()
-            
-            return success
-        except Exception:
-            # Try to disable writing on any error
+        for attempt in range(retries):
             try:
-                self._disable_modbus_write()
-            except Exception:
-                pass
-            return False
+                if not self._connect():
+                    print(f"  [WRITE] Failed to connect")
+                    return False
+                print(f"  [WRITE] Writing {value} to register {register}...")
+                # Use write_multiple_holding_registers (function code 16) instead of 
+                # write_holding_register (function code 6) - this is what deye-controller uses
+                self._modbus.write_multiple_holding_registers(register, [value])
+                print(f"  [WRITE] Success!")
+                return True
+            except Exception as e:
+                error_msg = str(e)
+                # AcknowledgeError means the device accepted but needs time - treat as success
+                if "AcknowledgeError" in error_msg or "Acknowledge" in error_msg:
+                    print(f"  [WRITE] Acknowledged (device processing) - waiting...")
+                    time.sleep(0.5)  # Give device time to process
+                    return True
+                # V5FrameError is a transient communication error - retry
+                if "V5FrameError" in error_msg or "sequence number" in error_msg:
+                    print(f"  [WRITE] V5 frame error (attempt {attempt + 1}/{retries}) - retrying...")
+                    time.sleep(0.3)  # Brief delay before retry
+                    # Force reconnection on next attempt
+                    try:
+                        self._modbus.disconnect()
+                    except Exception:
+                        pass
+                    self._modbus = None
+                    continue
+                print(f"  [WRITE] Exception: {type(e).__name__}: {e}")
+                return False
+        
+        print(f"  [WRITE] Failed after {retries} attempts")
+        return False
 
     def set_grid_charge_current(self, amps: int) -> bool:
         """
@@ -230,7 +218,7 @@ class DeyeInverter:
         amps = max(0, min(185, amps))
         # Write directly without the 1100 enable/disable sequence
         # This is how deye-controller does it
-        return self._write_register(self.REG_GRID_CHARGE_CURRENT, amps)
+        return self._write_register(deye_config.reg_grid_charge_current, amps)
 
     def set_max_charge_current(self, amps: int) -> bool:
         """
@@ -244,7 +232,7 @@ class DeyeInverter:
             True if successful, False otherwise
         """
         amps = max(0, min(185, amps))
-        return self._write_register(self.REG_MAX_CHARGE_AMPS, amps)
+        return self._write_register(deye_config.reg_max_charge_amps, amps)
 
     def set_max_discharge_current(self, amps: int) -> bool:
         """
@@ -257,74 +245,4 @@ class DeyeInverter:
             True if successful, False otherwise
         """
         amps = max(0, min(185, amps))
-        return self._write_register(self.REG_MAX_DISCHARGE_AMPS, amps)
-
-    def set_charge_mode(self, target_soc: int = 100) -> bool:
-        """
-        Configure inverter to charge from grid.
-        
-        Sets:
-        - Grid charging enabled
-        - Solar sell disabled for time slot 1
-        - Grid charge enabled for time slot 1
-        - Target SOC
-        
-        Args:
-            target_soc: Target state of charge (default 100%)
-            
-        Returns:
-            True if all writes succeeded, False otherwise
-        """
-        try:
-            if not self._enable_modbus_write():
-                return False
-            
-            success = True
-            success = success and self._write_register(self.REG_GRID_CHARGE_ENABLE, 1)
-            success = success and self._write_register(self.REG_SOLAR_SELL_SLOT1, 0)
-            success = success and self._write_register(self.REG_GRID_CHARGE_SLOT1, 1)
-            success = success and self._write_register(self.REG_CHARGE_TARGET_SOC, target_soc)
-            
-            self._disable_modbus_write()
-            return success
-        except Exception:
-            try:
-                self._disable_modbus_write()
-            except Exception:
-                pass
-            return False
-
-    def set_sell_mode(self, min_soc: int = 12) -> bool:
-        """
-        Configure inverter to sell/discharge.
-        
-        Sets:
-        - Grid charging enabled (required for sell mode)
-        - Solar sell enabled for time slot 1
-        - Grid charge disabled for time slot 1
-        - Minimum SOC (discharge limit)
-        
-        Args:
-            min_soc: Minimum state of charge before stopping discharge (default 12%)
-            
-        Returns:
-            True if all writes succeeded, False otherwise
-        """
-        try:
-            if not self._enable_modbus_write():
-                return False
-            
-            success = True
-            success = success and self._write_register(self.REG_GRID_CHARGE_ENABLE, 1)
-            success = success and self._write_register(self.REG_SOLAR_SELL_SLOT1, 1)
-            success = success and self._write_register(self.REG_GRID_CHARGE_SLOT1, 0)
-            success = success and self._write_register(self.REG_CHARGE_TARGET_SOC, min_soc)
-            
-            self._disable_modbus_write()
-            return success
-        except Exception:
-            try:
-                self._disable_modbus_write()
-            except Exception:
-                pass
-            return False
+        return self._write_register(deye_config.reg_max_discharge_amps, amps)

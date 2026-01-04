@@ -4,6 +4,9 @@ UI Components for Deye Inverter EMS application.
 
 import customtkinter as ctk
 from typing import List, Tuple, Callable
+
+from src.config import protection_config
+
 # Default charge current limits (Amps)
 DEFAULT_MAX_CHARGE_AMPS = 60
 DEFAULT_GRID_CHARGE_AMPS = 40
@@ -490,7 +493,7 @@ class TimeScheduleRow(ctk.CTkFrame):
         self.index = index
         self.on_delete = on_delete
         
-        self.grid_columnconfigure((1, 2, 3, 4, 5, 6), weight=1)
+        # Don't use weight on time columns to keep them compact
         
         # Enable checkbox
         self.enabled_var = ctk.BooleanVar(value=True)
@@ -499,32 +502,32 @@ class TimeScheduleRow(ctk.CTkFrame):
             variable=self.enabled_var,
             width=20
         )
-        self.chk_enabled.grid(row=0, column=0, padx=5, pady=8)
+        self.chk_enabled.grid(row=0, column=0, padx=(5, 10), pady=8)
         
-        # Start time
-        ctk.CTkLabel(self, text="From:", font=("Roboto", 10)).grid(row=0, column=1, padx=2)
+        # Start time - grouped together
+        ctk.CTkLabel(self, text="From:", font=("Roboto", 10)).grid(row=0, column=1, padx=(0, 2), sticky="e")
         self.start_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
-        self.start_hour.grid(row=0, column=2, padx=2)
+        self.start_hour.grid(row=0, column=2, padx=0)
         self.start_hour.insert(0, "00")
         
-        ctk.CTkLabel(self, text=":", font=("Roboto", 10)).grid(row=0, column=3, padx=0)
+        ctk.CTkLabel(self, text=":", font=("Roboto", 10, "bold")).grid(row=0, column=3, padx=0)
         self.start_min = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="MM")
-        self.start_min.grid(row=0, column=4, padx=2)
+        self.start_min.grid(row=0, column=4, padx=0)
         self.start_min.insert(0, "00")
         
-        # End time
-        ctk.CTkLabel(self, text="To:", font=("Roboto", 10)).grid(row=0, column=5, padx=2)
+        # End time - grouped together
+        ctk.CTkLabel(self, text="To:", font=("Roboto", 10)).grid(row=0, column=5, padx=(15, 2), sticky="e")
         self.end_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
-        self.end_hour.grid(row=0, column=6, padx=2)
+        self.end_hour.grid(row=0, column=6, padx=0)
         self.end_hour.insert(0, "23")
         
-        ctk.CTkLabel(self, text=":", font=("Roboto", 10)).grid(row=0, column=7, padx=0)
+        ctk.CTkLabel(self, text=":", font=("Roboto", 10, "bold")).grid(row=0, column=7, padx=0)
         self.end_min = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="MM")
-        self.end_min.grid(row=0, column=8, padx=2)
+        self.end_min.grid(row=0, column=8, padx=0)
         self.end_min.insert(0, "59")
         
         # Max Charge Amps
-        ctk.CTkLabel(self, text="Max Charge:", font=("Roboto", 10), text_color="#2ECC71").grid(row=0, column=9, padx=(10, 2))
+        ctk.CTkLabel(self, text="Max Charge:", font=("Roboto", 10), text_color="#2ECC71").grid(row=0, column=9, padx=(20, 2))
         self.max_charge = ctk.CTkEntry(self, width=50, justify="center")
         self.max_charge.grid(row=0, column=10, padx=2)
         self.max_charge.insert(0, str(DEFAULT_MAX_CHARGE_AMPS))
@@ -791,3 +794,256 @@ class TimeSchedulePanel(ctk.CTkFrame):
             )
         else:
             self.lbl_status.configure(text="No active slot (using defaults)", text_color="#F39C12")
+
+
+class OverpowerProtectionPanel(ctk.CTkFrame):
+    """
+    Panel for configuring overpower/overvoltage protection.
+    
+    Automatically increases charging speed when:
+    - Export power approaches the max sell power limit
+    - Phase voltage exceeds the warning threshold
+    
+    This helps prevent inverter shutdown due to grid overvoltage or power limits.
+    """
+    
+    def __init__(self, parent, on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
+        self.on_settings_change = on_settings_change
+        
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(
+            header_frame, text="⚡ BATTERY BOOST PROTECTION",
+            font=("Roboto", 14, "bold"),
+            text_color="#E74C3C"
+        ).grid(row=0, column=0, sticky="w")
+        
+        # Enable/Disable switch
+        self.enabled_var = ctk.BooleanVar(value=False)
+        self.enable_switch = ctk.CTkSwitch(
+            header_frame, text="Enable Protection",
+            variable=self.enabled_var,
+            font=("Roboto", 11, "bold"),
+            command=self._on_enable_toggle
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        
+        # Status label
+        self.lbl_status = ctk.CTkLabel(
+            header_frame, text="Disabled",
+            font=("Roboto", 11),
+            text_color="gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        
+        # Settings container
+        settings_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        settings_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        settings_frame.grid_columnconfigure((1, 3, 5, 7), weight=1)
+        
+        # Max Sell Power (W)
+        ctk.CTkLabel(
+            settings_frame, text="Max Sell Power:",
+            font=("Roboto", 10, "bold"),
+            text_color="#E74C3C"
+        ).grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
+        
+        self.max_sell_power = ctk.CTkEntry(settings_frame, width=60, justify="center")
+        self.max_sell_power.grid(row=0, column=1, padx=5, pady=8)
+        self.max_sell_power.insert(0, str(protection_config.max_sell_power))
+        
+        ctk.CTkLabel(settings_frame, text="W", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 15), pady=8)
+        
+        # Power threshold (%)
+        ctk.CTkLabel(
+            settings_frame, text="Power Threshold:",
+            font=("Roboto", 10),
+            text_color="#F39C12"
+        ).grid(row=0, column=3, padx=5, pady=8, sticky="w")
+        
+        self.power_threshold = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.power_threshold.grid(row=0, column=4, padx=5, pady=8)
+        self.power_threshold.insert(0, str(protection_config.power_threshold_pct))
+        
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 15), pady=8)
+        
+        # Voltage warning threshold (V)
+        ctk.CTkLabel(
+            settings_frame, text="Voltage Warning:",
+            font=("Roboto", 10),
+            text_color="#F39C12"
+        ).grid(row=0, column=6, padx=5, pady=8, sticky="w")
+        
+        self.voltage_warning = ctk.CTkEntry(settings_frame, width=55, justify="center")
+        self.voltage_warning.grid(row=0, column=7, padx=5, pady=8)
+        self.voltage_warning.insert(0, str(protection_config.voltage_warning))
+        self.voltage_warning.bind("<FocusOut>", self._on_warning_changed)
+        
+        ctk.CTkLabel(settings_frame, text="V", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 10), pady=8)
+        
+        # Second row: Step size and recovery settings
+        ctk.CTkLabel(
+            settings_frame, text="Charge Step:",
+            font=("Roboto", 10),
+            text_color="#2ECC71"
+        ).grid(row=1, column=0, padx=(10, 5), pady=8, sticky="w")
+        
+        self.charge_step = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.charge_step.grid(row=1, column=1, padx=5, pady=8)
+        self.charge_step.insert(0, str(protection_config.charge_step))
+        
+        ctk.CTkLabel(settings_frame, text="A", font=("Roboto", 10)).grid(row=1, column=2, padx=(0, 15), pady=8)
+        
+        # Recovery threshold (%) - when to start stepping down
+        ctk.CTkLabel(
+            settings_frame, text="Recovery at:",
+            font=("Roboto", 10),
+            text_color="#3498DB"
+        ).grid(row=1, column=3, padx=5, pady=8, sticky="w")
+        
+        self.recovery_threshold = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.recovery_threshold.grid(row=1, column=4, padx=5, pady=8)
+        self.recovery_threshold.insert(0, str(protection_config.recovery_threshold_pct))
+        
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=1, column=5, padx=(0, 15), pady=8)
+        
+        # Voltage recovery (V)
+        ctk.CTkLabel(
+            settings_frame, text="Voltage Recovery:",
+            font=("Roboto", 10),
+            text_color="#3498DB"
+        ).grid(row=1, column=6, padx=5, pady=8, sticky="w")
+        
+        self.voltage_recovery = ctk.CTkEntry(settings_frame, width=55, justify="center")
+        self.voltage_recovery.grid(row=1, column=7, padx=5, pady=8)
+        self.voltage_recovery.insert(0, str(protection_config.voltage_recovery))
+        
+        ctk.CTkLabel(settings_frame, text="V", font=("Roboto", 10)).grid(row=1, column=8, padx=(0, 10), pady=8)
+        
+        # Current state display
+        state_frame = ctk.CTkFrame(self, fg_color="transparent")
+        state_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
+        state_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        
+        self.lbl_power_state = ctk.CTkLabel(
+            state_frame, text="Export: -- W / -- W",
+            font=("Roboto", 11),
+            text_color="#888888"
+        )
+        self.lbl_power_state.grid(row=0, column=0, sticky="w", padx=10)
+        
+        self.lbl_voltage_state = ctk.CTkLabel(
+            state_frame, text="Max Voltage: -- V",
+            font=("Roboto", 11),
+            text_color="#888888"
+        )
+        self.lbl_voltage_state.grid(row=0, column=1)
+        
+        self.lbl_protection_state = ctk.CTkLabel(
+            state_frame, text="Protection: Inactive",
+            font=("Roboto", 11),
+            text_color="gray"
+        )
+        self.lbl_protection_state.grid(row=0, column=2, sticky="e", padx=10)
+        
+        # Info label
+        ctk.CTkLabel(
+            self, text="Absorbs excess power into battery by increasing charge speed when export or voltage limits are approached.",
+            font=("Roboto", 10),
+            text_color="#888888"
+        ).grid(row=3, column=0, pady=(5, 10))
+    
+    def _on_enable_toggle(self) -> None:
+        """Handle enable/disable toggle."""
+        if self.enabled_var.get():
+            self.lbl_status.configure(text="Active", text_color="#2ECC71")
+        else:
+            self.lbl_status.configure(text="Disabled", text_color="gray")
+            self.lbl_protection_state.configure(text="Protection: Inactive", text_color="gray")
+        
+        if self.on_settings_change:
+            self.on_settings_change()
+    
+    def is_enabled(self) -> bool:
+        """Check if protection is enabled."""
+        return self.enabled_var.get()
+    
+    def set_max_sell_power(self, power: int) -> None:
+        """Set the max sell power value (e.g., from inverter reading)."""
+        self.max_sell_power.delete(0, "end")
+        self.max_sell_power.insert(0, str(power))
+    
+    def _on_warning_changed(self, event=None) -> None:
+        """
+        When voltage warning is modified, auto-adjust recovery to warning - 2V.
+        User can then manually adjust recovery if needed.
+        """
+        try:
+            warning = float(self.voltage_warning.get())
+            new_recovery = round(warning - 2.0, 1)
+            self.voltage_recovery.delete(0, "end")
+            self.voltage_recovery.insert(0, str(new_recovery))
+        except ValueError:
+            pass  # Ignore if value can't be parsed
+    
+    def get_settings(self) -> dict:
+        """Get current protection settings."""
+        try:
+            return {
+                "enabled": self.enabled_var.get(),
+                "max_sell_power": int(self.max_sell_power.get()),
+                "power_threshold_pct": int(self.power_threshold.get()),
+                "recovery_threshold_pct": int(self.recovery_threshold.get()),
+                "voltage_warning": float(self.voltage_warning.get()),
+                "voltage_recovery": float(self.voltage_recovery.get()),
+                "charge_step": int(self.charge_step.get()),
+                "adjustment_interval": protection_config.adjustment_interval,
+            }
+        except ValueError:
+            # Return defaults on parse error
+            return {
+                "enabled": False,
+                "max_sell_power": protection_config.max_sell_power,
+                "power_threshold_pct": protection_config.power_threshold_pct,
+                "recovery_threshold_pct": protection_config.recovery_threshold_pct,
+                "voltage_warning": protection_config.voltage_warning,
+                "voltage_recovery": protection_config.voltage_recovery,
+                "charge_step": protection_config.charge_step,
+                "adjustment_interval": protection_config.adjustment_interval,
+            }
+    
+    def update_state_display(self, export_power: int, max_sell: int, max_voltage: float) -> None:
+        """Update the state display labels."""
+        # Export power display
+        export_pct = (export_power / max_sell * 100) if max_sell > 0 else 0
+        power_color = "#E74C3C" if export_pct > 95 else "#F39C12" if export_pct > 85 else "#888888"
+        self.lbl_power_state.configure(
+            text=f"Export: {export_power} W / {max_sell} W ({export_pct:.0f}%)",
+            text_color=power_color
+        )
+        
+        # Voltage display
+        voltage_warning = float(self.voltage_warning.get()) if self.voltage_warning.get() else protection_config.voltage_warning
+        voltage_color = "#E74C3C" if max_voltage > voltage_warning else "#888888"
+        self.lbl_voltage_state.configure(
+            text=f"Max Voltage: {max_voltage:.1f} V",
+            text_color=voltage_color
+        )
+    
+    def update_protection_state(self, active: bool, boost_amps: int = 0) -> None:
+        """Update the protection state label."""
+        if not self.enabled_var.get():
+            self.lbl_protection_state.configure(text="Protection: Disabled", text_color="gray")
+        elif active:
+            self.lbl_protection_state.configure(
+                text=f"Protection: ACTIVE (+{boost_amps}A boost)",
+                text_color="#E74C3C"
+            )
+        else:
+            self.lbl_protection_state.configure(text="Protection: Standby", text_color="#2ECC71")
