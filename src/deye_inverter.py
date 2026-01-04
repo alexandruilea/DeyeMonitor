@@ -186,10 +186,12 @@ class DeyeInverter:
                     print(f"  [WRITE] Acknowledged (device processing) - waiting...")
                     time.sleep(0.5)  # Give device time to process
                     return True
-                # V5FrameError is a transient communication error - retry
-                if "V5FrameError" in error_msg or "sequence number" in error_msg:
-                    print(f"  [WRITE] V5 frame error (attempt {attempt + 1}/{retries}) - retrying...")
-                    time.sleep(0.3)  # Brief delay before retry
+                # Transient communication errors - retry with reconnection
+                if ("V5FrameError" in error_msg or "sequence number" in error_msg or 
+                    "unpack requires a buffer" in error_msg or "Empty" in error_msg or
+                    error_msg.strip() == ""):
+                    print(f"  [WRITE] Communication error (attempt {attempt + 1}/{retries}) - retrying...")
+                    time.sleep(1.0)  # Delay before retry
                     # Force reconnection on next attempt
                     try:
                         self._modbus.disconnect()

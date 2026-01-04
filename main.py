@@ -238,17 +238,32 @@ class DeyeApp(ctk.CTk):
         # Reset last applied schedule so it will be re-evaluated
         self._last_applied_schedule = None
         
-        # If schedule was just disabled, apply defaults
+        # If schedule was just disabled, apply defaults in background thread
         if not self.schedule_panel.is_enabled():
             defaults = self.schedule_panel.get_default_values()
             print(f"[SCHEDULE] Disabled - applying defaults: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
-            success1 = self.inverter.set_max_charge_current(defaults["max_charge_amps"])
-            success2 = self.inverter.set_grid_charge_current(defaults["grid_charge_amps"])
-            if success1 and success2:
-                self._current_max_charge = defaults["max_charge_amps"]
-                self._current_grid_charge = defaults["grid_charge_amps"]
-                self._update_charge_display()
-            self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
+            
+            def apply_defaults():
+                success1 = True
+                success2 = True
+                
+                # Only write max charge if it changed
+                if self._current_max_charge != defaults["max_charge_amps"]:
+                    success1 = self.inverter.set_max_charge_current(defaults["max_charge_amps"])
+                    if success1:
+                        self._current_max_charge = defaults["max_charge_amps"]
+                
+                # Only write grid charge if it changed
+                if self._current_grid_charge != defaults["grid_charge_amps"]:
+                    success2 = self.inverter.set_grid_charge_current(defaults["grid_charge_amps"])
+                    if success2:
+                        self._current_grid_charge = defaults["grid_charge_amps"]
+                
+                if success1 and success2:
+                    self.after(0, self._update_charge_display)
+                self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
+            
+            threading.Thread(target=apply_defaults, daemon=True).start()
 
     def _process_schedule(self) -> None:
         """Process time-based charge schedule and apply settings if needed."""
@@ -285,19 +300,29 @@ class DeyeApp(ctk.CTk):
         if self._last_applied_schedule == schedule_key:
             return
         
-        # Apply the settings
+        # Apply the settings - only write values that actually changed
         if active_schedule:
             print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A")
         else:
             print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A")
         
-        success1 = self.inverter.set_max_charge_current(target_max)
-        success2 = self.inverter.set_grid_charge_current(target_grid)
+        success1 = True
+        success2 = True
+        
+        # Only write max charge if it changed
+        if self._current_max_charge != target_max:
+            success1 = self.inverter.set_max_charge_current(target_max)
+            if success1:
+                self._current_max_charge = target_max
+        
+        # Only write grid charge if it changed
+        if self._current_grid_charge != target_grid:
+            success2 = self.inverter.set_grid_charge_current(target_grid)
+            if success2:
+                self._current_grid_charge = target_grid
         
         if success1 and success2:
             self._last_applied_schedule = schedule_key
-            self._current_max_charge = target_max
-            self._current_grid_charge = target_grid
             self._update_charge_display()
             if active_schedule:
                 self._log_error(f"Schedule applied: Max={target_max}A, Grid={target_grid}A")
