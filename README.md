@@ -57,6 +57,10 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
    ```
 5. Edit `.env` with your inverter and Tapo device details
 
+## Start the app with the venv environment
+
+.venv/Scripts/python.exe main.py
+
 ## Configuration
 
 ### Environment Variables (.env)

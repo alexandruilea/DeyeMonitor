@@ -31,34 +31,39 @@ class PhaseDisplay(ctk.CTkFrame):
         
         # Progress bar
         self.bar = ctk.CTkProgressBar(self, height=18)
-        self.bar.grid(row=0, column=1, padx=10, sticky="ew")
+        self.bar.grid(row=0, column=1, padx=10, sticky="ew", columnspan=1)
         self.bar.set(0)
         
-        # UPS load label (primary - always available)
-        self.lbl_ups_load = ctk.CTkLabel(
+        # UPS load label (backup port loads) - switched to first position, yellow
+        self.lbl_ups = ctk.CTkLabel(
             self, text="UPS: 0 W",
             font=("Roboto", 20, "bold"),
             text_color="#FFA500",
-            width=95
+            width=110
         )
-        self.lbl_ups_load.grid(row=0, column=2, padx=10)
+        self.lbl_ups.grid(row=0, column=2, padx=(20, 5), rowspan=2)
         
-        # Grid load label (secondary - may be 0 if no smart meter)
-        self.lbl_load = ctk.CTkLabel(
+        # Grid label (External CT readings) - switched to second position, dynamic color
+        self.lbl_grid = ctk.CTkLabel(
             self, text="Grid: 0 W",
-            font=("Roboto", 11),
+            font=("Roboto", 20, "bold"),
             text_color="#888888",
-            width=95
+            width=110
         )
-        self.lbl_load.grid(row=1, column=2, padx=10, sticky="n")
+        self.lbl_grid.grid(row=0, column=3, padx=(5, 10), rowspan=2)
 
     def update(self, voltage: float, load: int, ups_load: int, max_load: int) -> None:
         """Update the phase display with new values."""
         self.lbl_voltage.configure(text=f"{voltage} V")
-        self.lbl_ups_load.configure(text=f"UPS: {ups_load} W")
-        self.lbl_load.configure(text=f"Grid: {load} W")
-        # Use UPS load for progress bar (the actual inverter output)
-        self.bar.set(min(ups_load / max_load, 1.0) if max_load > 0 else 0)
+        self.lbl_ups.configure(text=f"UPS: {ups_load} W")
+        
+        # Grid: grey when importing (positive), green when exporting (negative)
+        grid_color = "#2ECC71" if load < 0 else "#888888"
+        self.lbl_grid.configure(text=f"Grid: {load} W", text_color=grid_color)
+        
+        # Use load (grid_loads) for progress bar
+        self.bar.set(min(abs(load) / max_load, 1.0) if max_load > 0 else 0)
+        self.bar.set(min(abs(load) / max_load, 1.0) if max_load > 0 else 0)
 
 
 class OutletSettingsPanel(ctk.CTkFrame):

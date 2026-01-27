@@ -17,8 +17,8 @@ class InverterData:
     pv_power: int  # Solar PV power (W)
     grid_power: int  # Grid power (W) - positive = importing, negative = exporting
     voltages: List[float]  # Phase voltages [L1, L2, L3]
-    ups_loads: List[int]  # UPS/Backup port loads per phase [L1, L2, L3] - Inverter output (base 588 R62-64)
-    grid_loads: List[int]  # External CT loads per phase [L1, L2, L3] - Total consumption (base 588 R30-32, may be 0 if no CT)
+    ups_loads: List[int]  # UPS/Backup port loads per phase [L1, L2, L3] - Backup port output (base 588 R52-54)
+    grid_loads: List[int]  # Load phase power per phase [L1, L2, L3] - Total consumption (base 588 R62-64)
     running_state: int  # Running state (0=standby, 1=selfcheck, 2=normal, 3=alarm, 4=fault) - base 500 R0
     is_grid_connected: bool  # Grid relay status from AC relay register (base 552 Bit2)
 
@@ -94,8 +94,8 @@ class DeyeInverter:
                 pv_power=raw[84] + raw[85],  # R84-85: PV power
                 grid_power=self._parse_signed(raw[37]),  # R37: Grid side total power
                 voltages=[raw[56] / 10, raw[57] / 10, raw[58] / 10],  # R56-58: Load phase voltages
-                ups_loads=[raw[62], raw[63], raw[64]],  # R62-64: UPS load-side phase power (always available)
-                grid_loads=[self._parse_signed(raw[30]), self._parse_signed(raw[31]), self._parse_signed(raw[32])],  # R30-32: External CT power (0 if no CT)
+                ups_loads=[raw[52], raw[53], raw[54]],  # R52-54: UPS load-side phase power (backup port output)
+                grid_loads=[self._parse_signed(raw[62]), self._parse_signed(raw[63]), self._parse_signed(raw[64])],  # R62-64: Load phase power (total consumption)
                 running_state=status_raw[0],  # R0 of base 500: Running state
                 is_grid_connected=is_grid_connected  # Bit2 of register 552
             )
