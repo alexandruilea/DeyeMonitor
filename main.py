@@ -33,7 +33,7 @@ class DeyeApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Deye Inverter EMS Pro")
-        self.geometry("1050x1400")
+        self.geometry("1300x1400")
         ctk.set_appearance_mode("dark")
         
         # Initialize hardware managers
@@ -51,6 +51,9 @@ class DeyeApp(ctk.CTk):
         self._protection_boost_amps = 0  # Current boost amount added on top of schedule
         self._protection_active = False  # Whether protection is currently boosting
         self._last_protection_adjustment = 0.0  # Timestamp of last charge adjustment
+        
+        # Track if main loop has started (for safe error logging from threads)
+        self._main_loop_started = False
         
         # Setup UI
         self._setup_ui()
@@ -142,7 +145,7 @@ class DeyeApp(ctk.CTk):
         # Current charge settings display
         self.lbl_charge_settings = ctk.CTkLabel(
             stats_frame,
-            text="Charge Limits: Max: --A | Grid: --A",
+            text="Charge Limits: Max: --A | Grid: --A | Discharge: --A",
             font=("Roboto", 14, "bold"),
             text_color="#3498DB"
         )
@@ -168,6 +171,7 @@ class DeyeApp(ctk.CTk):
         # Track current charge settings for display
         self._current_max_charge = None
         self._current_grid_charge = None
+        self._current_max_discharge = None
         
         # Global Settings panel
         self.settings = SettingsPanel(
@@ -222,12 +226,13 @@ class DeyeApp(ctk.CTk):
     def _read_initial_charge_settings(self) -> None:
         """Read and display initial charge settings from the inverter."""
         print("[INIT] Reading initial charge settings from inverter...")
-        max_charge, grid_charge = self.inverter.read_charge_settings()
+        max_charge, grid_charge, max_discharge = self.inverter.read_battery_settings()
         
-        if max_charge is not None and grid_charge is not None:
-            print(f"[INIT] Current settings: Max={max_charge}A, Grid={grid_charge}A")
+        if max_charge is not None and grid_charge is not None and max_discharge is not None:
+            print(f"[INIT] Current settings: Max={max_charge}A, Grid={grid_charge}A, Discharge={max_discharge}A")
             self._current_max_charge = max_charge
             self._current_grid_charge = grid_charge
+            self._current_max_discharge = max_discharge
             self._update_charge_display()
         else:
             print("[INIT] Could not read charge settings from inverter")
@@ -240,7 +245,15 @@ class DeyeApp(ctk.CTk):
     
     def _log_error(self, message: str) -> None:
         """Log error message to UI (called from background thread)."""
-        self.after(0, lambda: self.log_viewer.add_log(message))
+        try:
+            if self._main_loop_started:
+                self.after(0, lambda: self.log_viewer.add_log(message))
+            else:
+                # Main loop not started yet, just print to console
+                print(f"[LOG] {message}")
+        except RuntimeError:
+            # Fallback if after() fails
+            print(f"[LOG] {message}")
 
     def _on_schedule_change(self) -> None:
         """Handle schedule enable/disable toggle."""
@@ -250,11 +263,12 @@ class DeyeApp(ctk.CTk):
         # If schedule was just disabled, apply defaults in background thread
         if not self.schedule_panel.is_enabled():
             defaults = self.schedule_panel.get_default_values()
-            print(f"[SCHEDULE] Disabled - applying defaults: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
+            print(f"[SCHEDULE] Disabled - applying defaults: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A, Discharge={defaults['max_discharge_amps']}A")
             
             def apply_defaults():
                 success1 = True
                 success2 = True
+                success3 = True
                 
                 # Only write max charge if it changed
                 if self._current_max_charge != defaults["max_charge_amps"]:
@@ -268,9 +282,15 @@ class DeyeApp(ctk.CTk):
                     if success2:
                         self._current_grid_charge = defaults["grid_charge_amps"]
                 
-                if success1 and success2:
+                # Only write max discharge if it changed
+                if self._current_max_discharge != defaults["max_discharge_amps"]:
+                    success3 = self.inverter.set_max_discharge_current(defaults["max_discharge_amps"])
+                    if success3:
+                        self._current_max_discharge = defaults["max_discharge_amps"]
+                
+                if success1 and success2 and success3:
                     self.after(0, self._update_charge_display)
-                self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A")
+                self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A, Discharge={defaults['max_discharge_amps']}A")
             
             threading.Thread(target=apply_defaults, daemon=True).start()
 
@@ -290,6 +310,7 @@ class DeyeApp(ctk.CTk):
         if active_schedule is not None:
             target_max = active_schedule["max_charge_amps"]
             target_grid = active_schedule["grid_charge_amps"]
+            target_discharge = active_schedule["max_discharge_amps"]
             schedule_key = (
                 active_schedule["start_hour"],
                 active_schedule["start_min"],
@@ -297,13 +318,15 @@ class DeyeApp(ctk.CTk):
                 active_schedule["end_min"],
                 target_max,
                 target_grid,
+                target_discharge,
             )
         else:
             # No active time slot - use defaults
             defaults = self.schedule_panel.get_default_values()
             target_max = defaults["max_charge_amps"]
             target_grid = defaults["grid_charge_amps"]
-            schedule_key = ("default", target_max, target_grid)
+            target_discharge = defaults["max_discharge_amps"]
+            schedule_key = ("default", target_max, target_grid, target_discharge)
         
         # Only apply if settings changed
         if self._last_applied_schedule == schedule_key:
@@ -311,12 +334,13 @@ class DeyeApp(ctk.CTk):
         
         # Apply the settings - only write values that actually changed
         if active_schedule:
-            print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A")
+            print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
         else:
-            print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A")
+            print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
         
         success1 = True
         success2 = True
+        success3 = True
         
         # Only write max charge if it changed
         if self._current_max_charge != target_max:
@@ -330,13 +354,19 @@ class DeyeApp(ctk.CTk):
             if success2:
                 self._current_grid_charge = target_grid
         
-        if success1 and success2:
+        # Only write max discharge if it changed
+        if self._current_max_discharge != target_discharge:
+            success3 = self.inverter.set_max_discharge_current(target_discharge)
+            if success3:
+                self._current_max_discharge = target_discharge
+        
+        if success1 and success2 and success3:
             self._last_applied_schedule = schedule_key
             self._update_charge_display()
             if active_schedule:
-                self._log_error(f"Schedule applied: Max={target_max}A, Grid={target_grid}A")
+                self._log_error(f"Schedule applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
             else:
-                self._log_error(f"Defaults applied: Max={target_max}A, Grid={target_grid}A")
+                self._log_error(f"Defaults applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
         else:
             self._log_error(f"Failed to apply charge settings")
 
@@ -344,8 +374,9 @@ class DeyeApp(ctk.CTk):
         """Update the charge settings display label."""
         max_str = f"{self._current_max_charge}A" if self._current_max_charge is not None else "--A"
         grid_str = f"{self._current_grid_charge}A" if self._current_grid_charge is not None else "--A"
+        discharge_str = f"{self._current_max_discharge}A" if self._current_max_discharge is not None else "--A"
         self.after(0, lambda: self.lbl_charge_settings.configure(
-            text=f"Charge Limits: Max: {max_str} | Grid: {grid_str}"
+            text=f"Charge Limits: Max: {max_str} | Grid: {grid_str} | Discharge: {discharge_str}"
         ))
 
     def _on_protection_change(self) -> None:
@@ -655,6 +686,8 @@ class DeyeApp(ctk.CTk):
 def main():
     """Application entry point."""
     app = DeyeApp()
+    # Mark that main loop is starting (for safe error logging)
+    app._main_loop_started = True
     app.mainloop()
 
 

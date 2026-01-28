@@ -10,6 +10,7 @@ from src.config import protection_config
 # Default charge current limits (Amps)
 DEFAULT_MAX_CHARGE_AMPS = 60
 DEFAULT_GRID_CHARGE_AMPS = 40
+DEFAULT_MAX_DISCHARGE_AMPS = 150
 
 class PhaseDisplay(ctk.CTkFrame):
     """Display widget for a single phase (voltage, load bar, power)."""
@@ -229,13 +230,13 @@ class SettingsPanel(ctk.CTkFrame):
         super().__init__(parent, **kwargs)
         self.variables = variables
         
-        self.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="ems")
+        self.grid_columnconfigure((0, 1, 2, 3, 4, 5), weight=1, uniform="ems")
         
         # Title
         ctk.CTkLabel(
             self, text="GLOBAL SAFETY CONFIGURATION",
             font=("Roboto", 14, "bold")
-        ).grid(row=0, column=0, columnspan=4, pady=10)
+        ).grid(row=0, column=0, columnspan=6, pady=10)
         
         # Manual override switch
         self.man_switch = ctk.CTkSwitch(
@@ -245,20 +246,20 @@ class SettingsPanel(ctk.CTkFrame):
             progress_color="#E74C3C",
             font=("Roboto", 12, "bold")
         )
-        self.man_switch.grid(row=1, column=0, columnspan=4, pady=(0, 20))
+        self.man_switch.grid(row=1, column=0, columnspan=6, pady=(0, 20))
         
         # Safety row
         ctk.CTkLabel(
             self, text="SAFETY:",
             font=("Roboto", 11, "bold"),
             text_color="#E74C3C"
-        ).grid(row=2, column=0, sticky="e", pady=20)
+        ).grid(row=2, column=0, sticky="e", pady=20, padx=10)
         
         self._add_setting_h("Max Phase W:", variables["phase_max"], 2, 1, is_safety=True)
         self._add_setting_h("Max UPS Total:", variables["max_ups_total_power"], 2, 3, is_safety=True)
         
         # Row 3: Critical voltage
-        self._add_setting_h("Critical LV:", variables["safety_lv"], 3, 1, is_safety=True)
+        self._add_setting_h("Critical LV:", variables["safety_lv"], 2, 5, is_safety=True)
 
     def _add_setting_h(self, label: str, var, row: int, col: int, is_safety: bool = False) -> None:
         """Add a horizontal setting (label left of entry)."""
@@ -493,10 +494,14 @@ class ErrorLogViewer(ctk.CTkScrollableFrame):
 class TimeScheduleRow(ctk.CTkFrame):
     """A single row in the time schedule representing one time interval."""
     
-    def __init__(self, parent, index: int, on_delete: Callable, **kwargs):
+    def __init__(self, parent, index: int, on_delete: Callable, on_value_change: Callable = None, **kwargs):
         super().__init__(parent, fg_color="#2B2B2B", corner_radius=5, **kwargs)
         self.index = index
         self.on_delete = on_delete
+        self.on_value_change = on_value_change
+        
+        # Track if fields have been modified (dirty flag)
+        self._dirty = False
         
         # Don't use weight on time columns to keep them compact
         
@@ -521,7 +526,7 @@ class TimeScheduleRow(ctk.CTkFrame):
         self.start_min.insert(0, "00")
         
         # End time - grouped together
-        ctk.CTkLabel(self, text="To:", font=("Roboto", 10)).grid(row=0, column=5, padx=(15, 2), sticky="e")
+        ctk.CTkLabel(self, text="To:", font=("Roboto", 10)).grid(row=0, column=5, padx=(35, 2), sticky="e")
         self.end_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
         self.end_hour.grid(row=0, column=6, padx=0)
         self.end_hour.insert(0, "23")
@@ -532,18 +537,34 @@ class TimeScheduleRow(ctk.CTkFrame):
         self.end_min.insert(0, "59")
         
         # Max Charge Amps
-        ctk.CTkLabel(self, text="Max Charge:", font=("Roboto", 10), text_color="#2ECC71").grid(row=0, column=9, padx=(20, 2))
-        self.max_charge = ctk.CTkEntry(self, width=50, justify="center")
+        ctk.CTkLabel(self, text="Max Charge:", font=("Roboto", 10), text_color="#2ECC71").grid(row=0, column=9, padx=(50, 2))
+        self.max_charge = ctk.CTkEntry(self, width=60, justify="center")
         self.max_charge.grid(row=0, column=10, padx=2)
         self.max_charge.insert(0, str(DEFAULT_MAX_CHARGE_AMPS))
-        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 5))
+        self.max_charge.bind("<Key>", lambda e: self._mark_dirty())
+        self.max_charge.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 20))
         
         # Grid Charge Amps
-        ctk.CTkLabel(self, text="Grid Charge:", font=("Roboto", 10), text_color="#3498DB").grid(row=0, column=12, padx=(10, 2))
-        self.grid_charge = ctk.CTkEntry(self, width=50, justify="center")
+        ctk.CTkLabel(self, text="Grid Charge:", font=("Roboto", 10), text_color="#3498DB").grid(row=0, column=12, padx=(30, 2))
+        self.grid_charge = ctk.CTkEntry(self, width=60, justify="center")
         self.grid_charge.grid(row=0, column=13, padx=2)
         self.grid_charge.insert(0, str(DEFAULT_GRID_CHARGE_AMPS))
-        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 5))
+        self.grid_charge.bind("<Key>", lambda e: self._mark_dirty())
+        self.grid_charge.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 20))
+        
+        # Max Discharge Amps
+        ctk.CTkLabel(self, text="Max Discharge:", font=("Roboto", 10), text_color="#E67E22").grid(row=0, column=15, padx=(30, 2))
+        self.max_discharge = ctk.CTkEntry(self, width=60, justify="center")
+        self.max_discharge.grid(row=0, column=16, padx=2)
+        self.max_discharge.insert(0, str(DEFAULT_MAX_DISCHARGE_AMPS))
+        self.max_discharge.bind("<Key>", lambda e: self._mark_dirty())
+        self.max_discharge.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=17, padx=(0, 25))
+        
+        # Add a spacer column to push delete button to the right
+        self.grid_columnconfigure(18, weight=1)
         
         # Delete button
         self.btn_delete = ctk.CTkButton(
@@ -551,7 +572,17 @@ class TimeScheduleRow(ctk.CTkFrame):
             fg_color="#E74C3C", hover_color="#C0392B",
             command=lambda: self.on_delete(self.index)
         )
-        self.btn_delete.grid(row=0, column=15, padx=5)
+        self.btn_delete.grid(row=0, column=19, padx=(5, 10))
+    
+    def _mark_dirty(self) -> None:
+        """Mark this row as having been edited."""
+        self._dirty = True
+    
+    def _on_field_change(self) -> None:
+        """Called when a field loses focus."""
+        if self._dirty and self.on_value_change:
+            self._dirty = False
+            self.on_value_change()
     
     def get_schedule(self) -> dict:
         """Get the schedule data from this row."""
@@ -564,6 +595,7 @@ class TimeScheduleRow(ctk.CTkFrame):
                 "end_min": int(self.end_min.get()),
                 "max_charge_amps": int(self.max_charge.get()),
                 "grid_charge_amps": int(self.grid_charge.get()),
+                "max_discharge_amps": int(self.max_discharge.get()),
             }
         except ValueError:
             return None
@@ -589,6 +621,9 @@ class TimeScheduleRow(ctk.CTkFrame):
         
         self.grid_charge.delete(0, "end")
         self.grid_charge.insert(0, str(data.get("grid_charge_amps", DEFAULT_GRID_CHARGE_AMPS)))
+        
+        self.max_discharge.delete(0, "end")
+        self.max_discharge.insert(0, str(data.get("max_discharge_amps", DEFAULT_MAX_DISCHARGE_AMPS)))
 
 
 class TimeSchedulePanel(ctk.CTkFrame):
@@ -670,6 +705,21 @@ class TimeSchedulePanel(ctk.CTkFrame):
             font=("Roboto", 10)
         ).grid(row=0, column=6, padx=(0, 8), pady=5)
         
+        ctk.CTkLabel(
+            self.defaults_frame, text="Discharge:",
+            font=("Roboto", 10),
+            text_color="#E67E22"
+        ).grid(row=0, column=7, padx=2, pady=5)
+        
+        self.default_max_discharge = ctk.CTkEntry(self.defaults_frame, width=45, justify="center")
+        self.default_max_discharge.grid(row=0, column=8, padx=2, pady=5)
+        self.default_max_discharge.insert(0, str(DEFAULT_MAX_DISCHARGE_AMPS))
+        
+        ctk.CTkLabel(
+            self.defaults_frame, text="A",
+            font=("Roboto", 10)
+        ).grid(row=0, column=9, padx=(0, 8), pady=5)
+        
         # Add button
         self.btn_add = ctk.CTkButton(
             header_frame, text="+ Add Time Slot",
@@ -705,10 +755,16 @@ class TimeSchedulePanel(ctk.CTkFrame):
         if self.on_schedule_change:
             self.on_schedule_change()
     
+    def _on_row_value_change(self) -> None:
+        """Called when a row value changes (field loses focus)."""
+        # Only trigger re-evaluation if schedule is enabled
+        if self.enabled_var.get() and self.on_schedule_change:
+            self.on_schedule_change()
+    
     def _add_row(self) -> None:
         """Add a new schedule row."""
         index = len(self.schedule_rows)
-        row = TimeScheduleRow(self.rows_container, index, self._delete_row)
+        row = TimeScheduleRow(self.rows_container, index, self._delete_row, on_value_change=self._on_row_value_change)
         row.grid(row=index, column=0, sticky="ew", pady=3)
         self.schedule_rows.append(row)
         
@@ -782,9 +838,10 @@ class TimeSchedulePanel(ctk.CTkFrame):
             return {
                 "max_charge_amps": int(self.default_max_charge.get()),
                 "grid_charge_amps": int(self.default_grid_charge.get()),
+                "max_discharge_amps": int(self.default_max_discharge.get()),
             }
         except ValueError:
-            return {"max_charge_amps": 60, "grid_charge_amps": 40}
+            return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150}
     
     def update_status(self, active_schedule: dict = None) -> None:
         """Update the status label to show current state."""
@@ -794,7 +851,7 @@ class TimeSchedulePanel(ctk.CTkFrame):
             start = f"{active_schedule['start_hour']:02d}:{active_schedule['start_min']:02d}"
             end = f"{active_schedule['end_hour']:02d}:{active_schedule['end_min']:02d}"
             self.lbl_status.configure(
-                text=f"Active: {start}-{end} | Max:{active_schedule['max_charge_amps']}A Grid:{active_schedule['grid_charge_amps']}A",
+                text=f"Active: {start}-{end} | Max:{active_schedule['max_charge_amps']}A Grid:{active_schedule['grid_charge_amps']}A Discharge:{active_schedule['max_discharge_amps']}A",
                 text_color="#2ECC71"
             )
         else:
@@ -850,7 +907,7 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
         # Settings container
         settings_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
         settings_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
-        settings_frame.grid_columnconfigure((1, 3, 5, 7), weight=1)
+        settings_frame.grid_columnconfigure((1, 3, 5, 7, 9), weight=1)
         
         # Max Sell Power (W)
         ctk.CTkLabel(
@@ -859,11 +916,11 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             text_color="#E74C3C"
         ).grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
         
-        self.max_sell_power = ctk.CTkEntry(settings_frame, width=60, justify="center")
+        self.max_sell_power = ctk.CTkEntry(settings_frame, width=70, justify="center")
         self.max_sell_power.grid(row=0, column=1, padx=5, pady=8)
         self.max_sell_power.insert(0, str(protection_config.max_sell_power))
         
-        ctk.CTkLabel(settings_frame, text="W", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 15), pady=8)
+        ctk.CTkLabel(settings_frame, text="W", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 10), pady=8)
         
         # Power threshold (%)
         ctk.CTkLabel(
@@ -872,11 +929,11 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             text_color="#F39C12"
         ).grid(row=0, column=3, padx=5, pady=8, sticky="w")
         
-        self.power_threshold = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.power_threshold = ctk.CTkEntry(settings_frame, width=50, justify="center")
         self.power_threshold.grid(row=0, column=4, padx=5, pady=8)
         self.power_threshold.insert(0, str(protection_config.power_threshold_pct))
         
-        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 15), pady=8)
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 10), pady=8)
         
         # Voltage warning threshold (V)
         ctk.CTkLabel(
@@ -885,12 +942,25 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             text_color="#F39C12"
         ).grid(row=0, column=6, padx=5, pady=8, sticky="w")
         
-        self.voltage_warning = ctk.CTkEntry(settings_frame, width=55, justify="center")
+        self.voltage_warning = ctk.CTkEntry(settings_frame, width=60, justify="center")
         self.voltage_warning.grid(row=0, column=7, padx=5, pady=8)
         self.voltage_warning.insert(0, str(protection_config.voltage_warning))
         self.voltage_warning.bind("<FocusOut>", self._on_warning_changed)
         
         ctk.CTkLabel(settings_frame, text="V", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 10), pady=8)
+        
+        # Adjustment interval
+        ctk.CTkLabel(
+            settings_frame, text="Interval:",
+            font=("Roboto", 10),
+            text_color="#95A5A6"
+        ).grid(row=0, column=9, padx=5, pady=8, sticky="w")
+        
+        self.adjustment_interval = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.adjustment_interval.grid(row=0, column=10, padx=5, pady=8)
+        self.adjustment_interval.insert(0, str(protection_config.adjustment_interval))
+        
+        ctk.CTkLabel(settings_frame, text="s", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 10), pady=8)
         
         # Second row: Step size and recovery settings
         ctk.CTkLabel(
@@ -899,11 +969,11 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             text_color="#2ECC71"
         ).grid(row=1, column=0, padx=(10, 5), pady=8, sticky="w")
         
-        self.charge_step = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.charge_step = ctk.CTkEntry(settings_frame, width=50, justify="center")
         self.charge_step.grid(row=1, column=1, padx=5, pady=8)
         self.charge_step.insert(0, str(protection_config.charge_step))
         
-        ctk.CTkLabel(settings_frame, text="A", font=("Roboto", 10)).grid(row=1, column=2, padx=(0, 15), pady=8)
+        ctk.CTkLabel(settings_frame, text="A", font=("Roboto", 10)).grid(row=1, column=2, padx=(0, 10), pady=8)
         
         # Recovery threshold (%) - when to start stepping down
         ctk.CTkLabel(
@@ -912,11 +982,11 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             text_color="#3498DB"
         ).grid(row=1, column=3, padx=5, pady=8, sticky="w")
         
-        self.recovery_threshold = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.recovery_threshold = ctk.CTkEntry(settings_frame, width=50, justify="center")
         self.recovery_threshold.grid(row=1, column=4, padx=5, pady=8)
         self.recovery_threshold.insert(0, str(protection_config.recovery_threshold_pct))
         
-        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=1, column=5, padx=(0, 15), pady=8)
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=1, column=5, padx=(0, 10), pady=8)
         
         # Voltage recovery (V)
         ctk.CTkLabel(

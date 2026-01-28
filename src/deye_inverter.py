@@ -106,27 +106,28 @@ class DeyeInverter:
             self._modbus = None
             return None
 
-    def read_charge_settings(self) -> tuple:
+    def read_battery_settings(self) -> tuple:
         """
-        Read current charge settings from the inverter.
+        Read current battery charge and discharge settings from the inverter.
         
         Returns:
-            Tuple of (max_charge_amps, grid_charge_amps) or (None, None) if read failed.
+            Tuple of (max_charge_amps, grid_charge_amps, max_discharge_amps) or (None, None, None) if read failed.
         """
         try:
             if not self._connect():
-                return None, None
+                return None, None, None
             
-            # Read register 108 (max charge amps) and 128 (grid charge amps)
+            # Read register 108 (max charge amps), 128 (grid charge amps), and 109 (max discharge amps)
             # They're not contiguous, so read separately
             max_charge = self._modbus.read_holding_registers(deye_config.reg_max_charge_amps, 1)
             grid_charge = self._modbus.read_holding_registers(deye_config.reg_grid_charge_current, 1)
+            max_discharge = self._modbus.read_holding_registers(deye_config.reg_max_discharge_amps, 1)
             
-            return max_charge[0], grid_charge[0]
+            return max_charge[0], grid_charge[0], max_discharge[0]
             
         except Exception as e:
             print(f"[READ] Failed to read charge settings: {e}")
-            return None, None
+            return None, None, None
 
     def read_max_sell_power(self) -> int:
         """
