@@ -18,7 +18,8 @@ class InverterData:
     grid_power: int  # Grid power (W) - positive = importing, negative = exporting
     voltages: List[float]  # Phase voltages [L1, L2, L3]
     ups_loads: List[int]  # UPS/Backup port loads per phase [L1, L2, L3] - Backup port output (base 588 R52-54)
-    grid_loads: List[int]  # Load phase power per phase [L1, L2, L3] - Total consumption (base 588 R62-64)
+    grid_loads: List[int]  # Grid side phase power per phase [L1, L2, L3] - Actual grid power per phase (base 588 R34-36)
+    total_loads: List[int]  # Total load consumption per phase [L1, L2, L3] - Total consumption (base 588 R62-64)
     running_state: int  # Running state (0=standby, 1=selfcheck, 2=normal, 3=alarm, 4=fault) - base 500 R0
     is_grid_connected: bool  # Grid relay status from AC relay register (base 552 Bit2)
 
@@ -95,7 +96,8 @@ class DeyeInverter:
                 grid_power=self._parse_signed(raw[37]),  # R37: Grid side total power
                 voltages=[raw[56] / 10, raw[57] / 10, raw[58] / 10],  # R56-58: Load phase voltages
                 ups_loads=[raw[52], raw[53], raw[54]],  # R52-54: UPS load-side phase power (backup port output)
-                grid_loads=[self._parse_signed(raw[62]), self._parse_signed(raw[63]), self._parse_signed(raw[64])],  # R62-64: Load phase power (total consumption)
+                grid_loads=[self._parse_signed(raw[34]), self._parse_signed(raw[35]), self._parse_signed(raw[36])],  # R34-36: Grid side phase power (actual grid import/export per phase)
+                total_loads=[self._parse_signed(raw[62]), self._parse_signed(raw[63]), self._parse_signed(raw[64])],  # R62-64: Total load consumption per phase
                 running_state=status_raw[0],  # R0 of base 500: Running state
                 is_grid_connected=is_grid_connected  # Bit2 of register 552
             )

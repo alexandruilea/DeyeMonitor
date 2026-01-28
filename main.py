@@ -116,10 +116,10 @@ class DeyeApp(ctk.CTk):
             phase.grid(row=i + 2, column=0, columnspan=3, padx=20, pady=5, sticky="ew")
             self.phases[name] = phase
         
-        # Stats row (Total UPS power + Current charge settings)
+        # Stats row (Total UPS power + Load consumption + Current charge settings)
         stats_frame = ctk.CTkFrame(self.scrollable, fg_color="transparent")
         stats_frame.grid(row=5, column=0, columnspan=3, pady=5, sticky="ew")
-        stats_frame.grid_columnconfigure((0, 1), weight=1)
+        stats_frame.grid_columnconfigure((0, 1, 2), weight=1)
         
         # Total UPS power display
         self.lbl_total_power = ctk.CTkLabel(
@@ -130,6 +130,15 @@ class DeyeApp(ctk.CTk):
         )
         self.lbl_total_power.grid(row=0, column=0, padx=10, sticky="w")
         
+        # Total load consumption per phase display
+        self.lbl_load_consumption = ctk.CTkLabel(
+            stats_frame,
+            text="L1: 0W L2: 0W L3: 0W",
+            font=("Roboto", 14, "bold"),
+            text_color="#9B59B6"
+        )
+        self.lbl_load_consumption.grid(row=0, column=1, padx=10)
+        
         # Current charge settings display
         self.lbl_charge_settings = ctk.CTkLabel(
             stats_frame,
@@ -137,7 +146,7 @@ class DeyeApp(ctk.CTk):
             font=("Roboto", 14, "bold"),
             text_color="#3498DB"
         )
-        self.lbl_charge_settings.grid(row=0, column=1, padx=10, sticky="e")
+        self.lbl_charge_settings.grid(row=0, column=2, padx=10, sticky="e")
         
         # Time Schedule Panel (for charge scheduling)
         self.schedule_panel = TimeSchedulePanel(
@@ -535,7 +544,7 @@ class DeyeApp(ctk.CTk):
         for i, name in enumerate(["L1", "L2", "L3"]):
             self.phases[name].update(
                 voltage=data.voltages[i],
-                load=data.grid_loads[i],  # External CT (may be 0 if no CT sensor)
+                load=data.grid_loads[i],  # Grid side phase power (actual grid import/export per phase)
                 ups_load=data.ups_loads[i],  # UPS output (always available)
                 max_load=phase_max
             )
@@ -545,6 +554,9 @@ class DeyeApp(ctk.CTk):
         max_total = int(self._get_safe_value(self.cfg["max_ups_total_power"], ems_defaults.max_ups_total_power))
         color = "#E74C3C" if total_ups > max_total else "#FFA500" if total_ups > max_total * 0.8 else "#2ECC71"
         self.lbl_total_power.configure(text=f"Total UPS: {total_ups} W / {max_total} W", text_color=color)
+        
+        # Update total load consumption per phase display
+        self.lbl_load_consumption.configure(text=f"L1: {data.total_loads[0]}W L2: {data.total_loads[1]}W L3: {data.total_loads[2]}W")
         
         # Update outlet buttons
         outlets = self.tapo.get_all_outlets()
