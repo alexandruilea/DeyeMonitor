@@ -8,7 +8,7 @@ import time
 import threading
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config
+from src.config import ems_defaults, deye_config, get_app_path
 from src.deye_inverter import DeyeInverter, InverterData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
@@ -35,6 +35,11 @@ class DeyeApp(ctk.CTk):
         self.title("Deye Inverter EMS Pro")
         self.geometry("1300x1400")
         ctk.set_appearance_mode("dark")
+        
+        # Set custom window icon
+        icon_path = get_app_path() / "icon.ico"
+        if icon_path.exists():
+            self.after(200, lambda: self.iconbitmap(str(icon_path)))
         
         # Initialize hardware managers
         self.inverter = DeyeInverter()

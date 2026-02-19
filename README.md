@@ -146,31 +146,60 @@ Run the application:
 python main.py
 ```
 
-## Building Standalone Executable
-
-You can build a standalone executable that doesn't require Python to be installed.
+## Building
 
 ### Prerequisites
 
+Make sure you have the project virtual environment set up:
+
 ```bash
+python -m venv venv
+venv\Scripts\activate        # Windows
+source venv/bin/activate     # Linux/Mac
+pip install -r requirements.txt
 pip install pyinstaller
 ```
 
-### Windows Build
+### Building the Executable
+
+Use the project venv to keep the build small (~16 MB):
 
 ```bash
-pyinstaller build.spec --clean
+.\venv\Scripts\pyinstaller.exe build.spec --clean    # Windows
+./venv/bin/pyinstaller build.spec --clean             # Linux
 ```
 
-The executable will be created at `dist/DeyeEMS.exe` (~18 MB).
+The executable will be created at `dist/DeyeEMS.exe` (Windows) or `dist/DeyeEMS` (Linux).
 
-#### Running on Windows
+### Building the Windows Installer
 
-1. Copy `DeyeEMS.exe` from the `dist/` folder to your desired location
-2. Copy your `.env` file to the **same folder** as the executable
-3. Double-click `DeyeEMS.exe` to run
+The project includes an [Inno Setup](https://jrsoftware.org/isinfo.php) script to create a proper Windows installer with Start Menu shortcuts and uninstaller.
 
-### Linux Build
+1. Install [Inno Setup 6](https://jrsoftware.org/isdl.php) (or via `winget install JRSoftware.InnoSetup`)
+2. First build the executable (see above)
+3. Build the installer:
+   ```bash
+   & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
+   ```
+   Or open `installer.iss` in Inno Setup and click **Build > Compile**.
+
+The installer will be created at `dist/DeyeEMS_Setup.exe` (~18 MB).
+
+#### What the installer does
+
+- Installs `DeyeEMS.exe` to `Program Files` (or per-user location)
+- Creates a `.env` config file from the included template (won't overwrite existing)
+- Adds Start Menu shortcuts for the app and for editing the config
+- Optional desktop shortcut
+- Full uninstaller
+
+### Running on Windows
+
+**From installer:** Run `DeyeEMS_Setup.exe`, follow the wizard, then launch from the Start Menu or desktop shortcut. Edit the `.env` file in the install folder with your inverter settings.
+
+**Portable (no install):** Copy `dist/DeyeEMS.exe` and your `.env` file to any folder, then double-click to run.
+
+### Running on Linux
 
 > **Note:** You must build on Linux to create a Linux executable. PyInstaller does not support cross-compilation.
 
@@ -181,37 +210,13 @@ The executable will be created at `dist/DeyeEMS.exe` (~18 MB).
    sudo apt-get install python3-tk python3-venv
    ```
 
-2. Create and activate a virtual environment:
+2. Build the executable using the venv (see above)
 
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
+3. Copy `DeyeEMS` from `dist/` to your desired location along with your `.env` file
 
-3. Install Python dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   pip install pyinstaller
-   ```
-
-4. Build the executable:
-   ```bash
-   pyinstaller build.spec --clean
-   ```
-
-The executable will be created at `dist/DeyeEMS` (~20-25 MB).
-
-#### Running on Linux
-
-1. Copy `DeyeEMS` from the `dist/` folder to your desired location
-2. Copy your `.env` file to the **same folder** as the executable
-3. Make it executable (if not already):
+4. Make it executable and run:
    ```bash
    chmod +x DeyeEMS
-   ```
-4. Run the application:
-   ```bash
    ./DeyeEMS
    ```
 
