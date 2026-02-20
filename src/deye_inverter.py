@@ -2,11 +2,43 @@
 Deye inverter communication module via Modbus/Solarman protocol.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
 from pysolarmanv5 import PySolarmanV5
 
 from src.config import deye_config
+
+
+@dataclass
+class BMSData:
+    """Data structure for complete BMS readings."""
+    # BMS system-level data (registers 210-224)
+    charge_voltage: float = 0.0       # BMS charge voltage setpoint (V)
+    discharge_voltage: float = 0.0    # BMS discharge voltage setpoint (V)
+    charge_current_limit: int = 0     # BMS charge current limit (A)
+    discharge_current_limit: int = 0  # BMS discharge current limit (A)
+    realtime_soc: int = 0             # Real-time SOC (%)
+    realtime_voltage: float = 0.0     # Real-time voltage (V)
+    realtime_current: int = 0         # Real-time current (A)
+    realtime_temperature: float = 0.0 # Real-time temperature (°C)
+    max_charge_current_offgrid: int = 0   # Max charge current off-grid (A)
+    max_discharge_current_offgrid: int = 0  # Max discharge current off-grid (A)
+    alarm: int = 0                    # Alarm bitmask
+    fault: int = 0                    # Fault bitmask
+    battery_type: int = 0             # Battery type code
+    soh: int = 0                      # State of Health (%)
+    # Battery summary (registers 586-592)
+    battery_temperature: float = 0.0  # Battery temperature (°C)
+    battery_voltage: float = 0.0      # Battery voltage (V)
+    battery_soc: int = 0              # Battery SOC (%)
+    battery_power: int = 0            # Battery power (W)
+    battery_current: float = 0.0      # Battery current (A)
+    corrected_ah: int = 0             # Corrected capacity (Ah)
+    # Daily/total energy (registers 514-519)
+    today_charge_kwh: float = 0.0     # Today's charge (kWh)
+    today_discharge_kwh: float = 0.0  # Today's discharge (kWh)
+    total_charge_kwh: float = 0.0     # Total charge (kWh)
+    total_discharge_kwh: float = 0.0  # Total discharge (kWh)
 
 
 @dataclass
@@ -145,6 +177,72 @@ class DeyeInverter:
             
         except Exception as e:
             print(f"[READ] Failed to read max sell power: {e}")
+            return None
+
+    def read_bms_data(self) -> Optional[BMSData]:
+        """
+        Read complete BMS data including per-pack information.
+        
+        Returns:
+            BMSData object with all battery/BMS readings, or None if read failed.
+        """
+        try:
+            if not self._connect():
+                return None
+            
+            bms = BMSData()
+            
+            # Read BMS system registers (210-224)
+            try:
+                bms_raw = self._modbus.read_holding_registers(210, 15)
+                bms.charge_voltage = bms_raw[0] * 0.01
+                bms.discharge_voltage = bms_raw[1] * 0.01
+                bms.charge_current_limit = bms_raw[2]
+                bms.discharge_current_limit = bms_raw[3]
+                bms.realtime_soc = bms_raw[4]
+                bms.realtime_voltage = bms_raw[5] * 0.01
+                bms.realtime_current = self._parse_signed(bms_raw[6])
+                bms.realtime_temperature = (bms_raw[7] - 1000) / 10.0
+                bms.max_charge_current_offgrid = bms_raw[8]
+                bms.max_discharge_current_offgrid = bms_raw[9]
+                bms.alarm = bms_raw[10]
+                bms.fault = bms_raw[11]
+                bms.battery_type = bms_raw[13]
+                bms.soh = bms_raw[14]
+            except Exception as e:
+                print(f"[BMS] Failed to read BMS registers 210-224: {e}")
+            
+            # Read battery daily/total energy (514-519)
+            try:
+                energy_raw = self._modbus.read_holding_registers(514, 6)
+                bms.today_charge_kwh = energy_raw[0] * 0.1
+                bms.today_discharge_kwh = energy_raw[1] * 0.1
+                bms.total_charge_kwh = (energy_raw[2] + energy_raw[3] * 65536) * 0.1
+                bms.total_discharge_kwh = (energy_raw[4] + energy_raw[5] * 65536) * 0.1
+            except Exception as e:
+                print(f"[BMS] Failed to read energy registers 514-519: {e}")
+            
+            # Read battery summary (586-592)
+            try:
+                summary_raw = self._modbus.read_holding_registers(586, 7)
+                bms.battery_temperature = (summary_raw[0] - 1000) / 10.0  # Offset 1000 = 0°C
+                bms.battery_voltage = summary_raw[1] * 0.01
+                bms.battery_soc = summary_raw[2]
+                bms.battery_power = self._parse_signed(summary_raw[4])
+                bms.battery_current = self._parse_signed(summary_raw[5]) * 0.01
+                bms.corrected_ah = summary_raw[6]
+            except Exception as e:
+                print(f"[BMS] Failed to read summary registers 586-592: {e}")
+            
+            # Note: Per-pack data registers (600-809) overlap with the main inverter
+            # data block (588-677) and are not populated for CAN-connected batteries
+            # (e.g. Pylon). Pack-level data is only available with RS485-connected BMS.
+            
+            return bms
+            
+        except Exception as e:
+            print(f"[BMS] Failed to read BMS data: {e}")
+            self._modbus = None
             return None
 
     def disconnect(self) -> None:

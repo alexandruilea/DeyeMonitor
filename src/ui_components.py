@@ -277,10 +277,11 @@ class SettingsPanel(ctk.CTkFrame):
 class StatusHeader(ctk.CTkFrame):
     """Header widget showing system status and main metrics."""
     
-    def __init__(self, parent, **kwargs):
+    def __init__(self, parent, bat_stats_command=None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         
         self.grid_columnconfigure((0, 1, 2), weight=1)
+        self.grid_columnconfigure(3, weight=0)
         
         # Status label
         self.lbl_status = ctk.CTkLabel(
@@ -310,6 +311,18 @@ class StatusHeader(ctk.CTkFrame):
             font=("Roboto", 22, "bold")
         )
         self.lbl_grid.grid(row=1, column=2)
+        
+        # BatStats button (top-right corner)
+        self.btn_batstats = ctk.CTkButton(
+            self, text="BatStats",
+            command=bat_stats_command,
+            font=("Roboto", 14, "bold"),
+            width=90, height=36,
+            fg_color="#2C3E50",
+            hover_color="#34495E",
+            corner_radius=8,
+        )
+        self.btn_batstats.grid(row=0, column=3, rowspan=2, padx=(10, 15), pady=10, sticky="ne")
 
     def update_status(self, text: str, color: str, is_grid_connected: bool = True) -> None:
         """Update the status label with grid connection status."""
@@ -1122,3 +1135,190 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             )
         else:
             self.lbl_protection_state.configure(text="Protection: Standby", text_color="#2ECC71")
+
+
+class BatteryStatsDialog(ctk.CTkToplevel):
+    """Scrollable dialog window showing detailed BMS battery statistics."""
+    
+    # Color scheme
+    SECTION_BG = "#1E1E1E"
+    LABEL_COLOR = "#AAAAAA"
+    VALUE_COLOR = "#FFFFFF"
+    HEADER_COLOR = "#3498DB"
+    GOOD_COLOR = "#2ECC71"
+    WARN_COLOR = "#F39C12"
+    BAD_COLOR = "#E74C3C"
+    
+    BATTERY_TYPES = {
+        0x0000: "Pylon/Solax (CAN)",
+        0x0001: "Tianbangda (RS485)",
+        0x0002: "KOK",
+        0x0003: "Keith",
+        0x0004: "Tuopai",
+        0x0005: "Pylon (RS485)",
+        0x0006: "Jielis (RS485)",
+        0x0007: "Xinwangda",
+        0x0008: "Xinruineng",
+        0x0009: "Tianbangda (RS485)",
+        0x000A: "Shenggao (CAN)",
+    }
+    
+    def __init__(self, parent, bms_data, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.title("Battery Statistics (BMS)")
+        self.geometry("700x800")
+        self.minsize(600, 400)
+        self.configure(fg_color="#1A1A1A")
+        
+        # Make it modal-like (grab focus)
+        self.transient(parent)
+        self.grab_set()
+        self.focus_force()
+        
+        # Set icon from parent
+        self.after(200, lambda: self._set_icon(parent))
+        
+        # Main scrollable container
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        scroll.grid_columnconfigure(0, weight=1)
+        
+        row = 0
+        
+        if bms_data is None:
+            ctk.CTkLabel(
+                scroll, text="Failed to read BMS data.\nCheck inverter connection.",
+                font=("Roboto", 18, "bold"), text_color=self.BAD_COLOR
+            ).grid(row=0, column=0, pady=40)
+            self._add_close_button(scroll, 1)
+            return
+        
+        # ── BMS System Overview ──
+        # Format current with direction indicator
+        current_val = bms_data.realtime_current
+        if current_val > 0:
+            current_text = f"+{current_val} A  (charging)"
+            current_color = self.GOOD_COLOR
+        elif current_val < 0:
+            current_text = f"{current_val} A  (discharging)"
+            current_color = self.WARN_COLOR
+        else:
+            current_text = "0 A  (idle)"
+            current_color = self.VALUE_COLOR
+        
+        # Format power with direction
+        power_val = bms_data.battery_power
+        if power_val > 0:
+            power_text = f"+{power_val} W  (charging)"
+            power_color = self.GOOD_COLOR
+        elif power_val < 0:
+            power_text = f"{power_val} W  (discharging)"
+            power_color = self.WARN_COLOR
+        else:
+            power_text = "0 W  (idle)"
+            power_color = self.VALUE_COLOR
+        
+        row = self._add_section(scroll, row, "BMS SYSTEM OVERVIEW", [
+            ("State of Charge (SOC)", f"{bms_data.realtime_soc}%", self._soc_color(bms_data.realtime_soc)),
+            ("Battery Voltage", f"{bms_data.realtime_voltage:.2f} V", self.VALUE_COLOR),
+            ("Battery Current", current_text, current_color),
+            ("Battery Temperature", f"{bms_data.realtime_temperature:.1f} °C", self._temp_color(bms_data.realtime_temperature)),
+            ("Battery Power", power_text, power_color),
+            ("Battery Type", self.BATTERY_TYPES.get(bms_data.battery_type, f"Unknown (0x{bms_data.battery_type:04X})"), self.VALUE_COLOR),
+            ("Corrected Capacity", f"{bms_data.corrected_ah} Ah", self.VALUE_COLOR),
+        ])
+        
+        # ── BMS Limits ──
+        row = self._add_section(scroll, row, "BMS CHARGE/DISCHARGE LIMITS", [
+            ("Max Charge Voltage", f"{bms_data.charge_voltage:.2f} V", self.VALUE_COLOR),
+            ("Charge Current Limit", f"{bms_data.charge_current_limit} A", self.VALUE_COLOR),
+            ("Discharge Current Limit", f"{bms_data.discharge_current_limit} A", self.VALUE_COLOR),
+        ])
+        
+        # ── Alarms & Faults ──
+        alarm_color = self.BAD_COLOR if bms_data.alarm else self.GOOD_COLOR
+        fault_color = self.BAD_COLOR if bms_data.fault else self.GOOD_COLOR
+        row = self._add_section(scroll, row, "ALARMS & FAULTS", [
+            ("Alarm Status", "ALARM ACTIVE" if bms_data.alarm else "No Alarms", alarm_color),
+            ("Alarm Code", f"0x{bms_data.alarm:04X}" if bms_data.alarm else "—", alarm_color),
+            ("Fault Status", "FAULT ACTIVE" if bms_data.fault else "No Faults", fault_color),
+            ("Fault Code", f"0x{bms_data.fault:04X}" if bms_data.fault else "—", fault_color),
+        ])
+        
+        # ── Energy Statistics ──
+        row = self._add_section(scroll, row, "ENERGY STATISTICS", [
+            ("Today Charged", f"{bms_data.today_charge_kwh:.1f} kWh", self.VALUE_COLOR),
+            ("Today Discharged", f"{bms_data.today_discharge_kwh:.1f} kWh", self.VALUE_COLOR),
+            ("Total Charged", f"{bms_data.total_charge_kwh:.1f} kWh", self.VALUE_COLOR),
+            ("Total Discharged", f"{bms_data.total_discharge_kwh:.1f} kWh", self.VALUE_COLOR),
+        ])
+        
+        # Close button
+        self._add_close_button(scroll, row)
+    
+    def _set_icon(self, parent):
+        """Copy icon from parent window."""
+        try:
+            icon = parent.iconbitmap()
+            if icon:
+                self.iconbitmap(icon)
+        except Exception:
+            pass
+    
+    def _add_section(self, parent, start_row, title, items):
+        """Add a titled section with key-value pairs."""
+        # Section header
+        ctk.CTkLabel(
+            parent, text=title,
+            font=("Roboto", 16, "bold"),
+            text_color=self.HEADER_COLOR
+        ).grid(row=start_row, column=0, pady=(15, 5), padx=10, sticky="w")
+        start_row += 1
+        
+        # Section frame
+        frame = ctk.CTkFrame(parent, fg_color=self.SECTION_BG, corner_radius=8)
+        frame.grid(row=start_row, column=0, sticky="ew", padx=10, pady=(0, 5))
+        frame.grid_columnconfigure(1, weight=1)
+        
+        for i, (label, value, color) in enumerate(items):
+            ctk.CTkLabel(
+                frame, text=label,
+                font=("Roboto", 13),
+                text_color=self.LABEL_COLOR
+            ).grid(row=i, column=0, padx=(15, 10), pady=3, sticky="w")
+            
+            ctk.CTkLabel(
+                frame, text=value,
+                font=("Roboto", 13, "bold"),
+                text_color=color
+            ).grid(row=i, column=1, padx=(10, 15), pady=3, sticky="e")
+        
+        return start_row + 1
+    
+    def _add_close_button(self, parent, row):
+        """Add a close button at the bottom."""
+        ctk.CTkButton(
+            parent, text="Close",
+            command=self.destroy,
+            font=("Roboto", 14, "bold"),
+            width=120, height=36,
+            fg_color="#2C3E50",
+            hover_color="#34495E",
+        ).grid(row=row, column=0, pady=(20, 10))
+    
+    def _soc_color(self, soc):
+        if soc >= 60:
+            return self.GOOD_COLOR
+        elif soc >= 30:
+            return self.WARN_COLOR
+        return self.BAD_COLOR
+    
+    def _temp_color(self, temp):
+        if 10 <= temp <= 40:
+            return self.GOOD_COLOR
+        elif 0 <= temp <= 50:
+            return self.WARN_COLOR
+        return self.BAD_COLOR

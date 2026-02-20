@@ -9,7 +9,7 @@ import threading
 import customtkinter as ctk
 
 from src.config import ems_defaults, deye_config, get_app_path
-from src.deye_inverter import DeyeInverter, InverterData
+from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
 from src.ui_components import (
@@ -22,6 +22,7 @@ from src.ui_components import (
     ErrorLogViewer,
     TimeSchedulePanel,
     OverpowerProtectionPanel,
+    BatteryStatsDialog,
 )
 
 
@@ -43,6 +44,7 @@ class DeyeApp(ctk.CTk):
         
         # Initialize hardware managers
         self.inverter = DeyeInverter()
+        self._inverter_lock = threading.Lock()  # Serialize modbus access across threads
         self.tapo = TapoManager(error_callback=self._log_error)
         self.ems = EMSLogic(self.tapo)
         
@@ -114,7 +116,7 @@ class DeyeApp(ctk.CTk):
         self.scrollable.grid_columnconfigure((0, 1, 2), weight=1)
         
         # Status header
-        self.header = StatusHeader(self.scrollable)
+        self.header = StatusHeader(self.scrollable, bat_stats_command=self._open_battery_stats)
         self.header.grid(row=0, column=0, columnspan=3, sticky="ew")
         
         # Phase displays
@@ -260,6 +262,24 @@ class DeyeApp(ctk.CTk):
             # Fallback if after() fails
             print(f"[LOG] {message}")
 
+    def _open_battery_stats(self) -> None:
+        """Open the Battery Statistics dialog with live BMS data."""
+        # Disable button while loading
+        self.header.btn_batstats.configure(state="disabled", text="Loading...")
+        
+        def _read_and_show():
+            with self._inverter_lock:
+                bms_data = self.inverter.read_bms_data()
+            self.after(0, lambda: self._show_battery_dialog(bms_data))
+        
+        # Read BMS data in background thread to avoid freezing UI
+        threading.Thread(target=_read_and_show, daemon=True).start()
+    
+    def _show_battery_dialog(self, bms_data) -> None:
+        """Show the battery stats dialog (called on main thread)."""
+        self.header.btn_batstats.configure(state="normal", text="BatStats")
+        BatteryStatsDialog(self, bms_data)
+
     def _on_schedule_change(self) -> None:
         """Handle schedule enable/disable toggle."""
         # Reset last applied schedule so it will be re-evaluated
@@ -271,31 +291,32 @@ class DeyeApp(ctk.CTk):
             print(f"[SCHEDULE] Disabled - applying defaults: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A, Discharge={defaults['max_discharge_amps']}A")
             
             def apply_defaults():
-                success1 = True
-                success2 = True
-                success3 = True
-                
-                # Only write max charge if it changed
-                if self._current_max_charge != defaults["max_charge_amps"]:
-                    success1 = self.inverter.set_max_charge_current(defaults["max_charge_amps"])
-                    if success1:
-                        self._current_max_charge = defaults["max_charge_amps"]
-                
-                # Only write grid charge if it changed
-                if self._current_grid_charge != defaults["grid_charge_amps"]:
-                    success2 = self.inverter.set_grid_charge_current(defaults["grid_charge_amps"])
-                    if success2:
-                        self._current_grid_charge = defaults["grid_charge_amps"]
-                
-                # Only write max discharge if it changed
-                if self._current_max_discharge != defaults["max_discharge_amps"]:
-                    success3 = self.inverter.set_max_discharge_current(defaults["max_discharge_amps"])
-                    if success3:
-                        self._current_max_discharge = defaults["max_discharge_amps"]
-                
-                if success1 and success2 and success3:
-                    self.after(0, self._update_charge_display)
-                self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A, Discharge={defaults['max_discharge_amps']}A")
+                with self._inverter_lock:
+                    success1 = True
+                    success2 = True
+                    success3 = True
+                    
+                    # Only write max charge if it changed
+                    if self._current_max_charge != defaults["max_charge_amps"]:
+                        success1 = self.inverter.set_max_charge_current(defaults["max_charge_amps"])
+                        if success1:
+                            self._current_max_charge = defaults["max_charge_amps"]
+                    
+                    # Only write grid charge if it changed
+                    if self._current_grid_charge != defaults["grid_charge_amps"]:
+                        success2 = self.inverter.set_grid_charge_current(defaults["grid_charge_amps"])
+                        if success2:
+                            self._current_grid_charge = defaults["grid_charge_amps"]
+                    
+                    # Only write max discharge if it changed
+                    if self._current_max_discharge != defaults["max_discharge_amps"]:
+                        success3 = self.inverter.set_max_discharge_current(defaults["max_discharge_amps"])
+                        if success3:
+                            self._current_max_discharge = defaults["max_discharge_amps"]
+                    
+                    if success1 and success2 and success3:
+                        self.after(0, self._update_charge_display)
+                    self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A, Discharge={defaults['max_discharge_amps']}A")
             
             threading.Thread(target=apply_defaults, daemon=True).start()
 
@@ -553,17 +574,18 @@ class DeyeApp(ctk.CTk):
     def _data_loop(self) -> None:
         """Background thread for polling inverter data."""
         while self._running:
-            data = self.inverter.read_data()
+            with self._inverter_lock:
+                data = self.inverter.read_data()
             
-            if data is not None:
-                self.after(0, self._update_dashboard, data)
-                self._process_logic(data)
-                # Process time-based charge schedule
-                self._process_schedule()
-                # Process overpower protection (may override schedule charge values)
-                self._process_overpower_protection(data)
-            else:
-                self.after(0, lambda: self.header.update_status("CONNECTING...", "orange"))
+                if data is not None:
+                    self.after(0, self._update_dashboard, data)
+                    self._process_logic(data)
+                    # Process time-based charge schedule
+                    self._process_schedule()
+                    # Process overpower protection (may override schedule charge values)
+                    self._process_overpower_protection(data)
+                else:
+                    self.after(0, lambda: self.header.update_status("CONNECTING...", "orange"))
             
             time.sleep(self.POLL_INTERVAL)
 
