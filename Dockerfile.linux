@@ -1,0 +1,16 @@
+# Build environment targeting Debian 11 (glibc 2.31) for broad Linux compatibility
+FROM python:3.12-bullseye
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-tk tk-dev binutils upx \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pyinstaller
+
+COPY . .
+
+RUN pyinstaller build_linux.spec --clean --distpath /out \
+    && chmod +x /out/DeyeEMS

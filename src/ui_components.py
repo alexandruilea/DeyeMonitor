@@ -5,12 +5,12 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable
 
-from src.config import protection_config
+from src.config import protection_config, deye_config
 
-# Default charge current limits (Amps)
-DEFAULT_MAX_CHARGE_AMPS = 60
-DEFAULT_GRID_CHARGE_AMPS = 40
-DEFAULT_MAX_DISCHARGE_AMPS = 150
+# Default charge current limits (Amps) - loaded from config
+DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
+DEFAULT_GRID_CHARGE_AMPS = deye_config.default_grid_charge_amps
+DEFAULT_MAX_DISCHARGE_AMPS = deye_config.default_max_discharge_amps
 
 class PhaseDisplay(ctk.CTkFrame):
     """Display widget for a single phase (voltage, load bar, power)."""
@@ -900,7 +900,7 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
         ).grid(row=0, column=0, sticky="w")
         
         # Enable/Disable switch
-        self.enabled_var = ctk.BooleanVar(value=False)
+        self.enabled_var = ctk.BooleanVar(value=protection_config.enabled_at_startup)
         self.enable_switch = ctk.CTkSwitch(
             header_frame, text="Enable Protection",
             variable=self.enabled_var,
@@ -908,12 +908,15 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             command=self._on_enable_toggle
         )
         self.enable_switch.grid(row=0, column=1, padx=20)
+        if protection_config.enabled_at_startup:
+            self.enable_switch.select()
         
         # Status label
+        _startup_enabled = protection_config.enabled_at_startup
         self.lbl_status = ctk.CTkLabel(
-            header_frame, text="Disabled",
+            header_frame, text="Active" if _startup_enabled else "Disabled",
             font=("Roboto", 11),
-            text_color="gray"
+            text_color="#2ECC71" if _startup_enabled else "gray"
         )
         self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
         

@@ -44,3 +44,5 @@ env/
 .DS_Store
 Thumbs.db
 /.vs
+DeyeMonitor.zip
+dist_linux/DeyeEMS
