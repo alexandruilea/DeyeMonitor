@@ -44,6 +44,7 @@ class DeyeConfig:
     reg_max_grid_power: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_MAX_GRID_POWER", "143")))
     reg_max_solar_sell_power: int = field(default_factory=lambda: int(os.getenv("DEYE_REG_MAX_SOLAR_SELL_POWER", "143")))
     max_charge_amps_limit: int = field(default_factory=lambda: int(os.getenv("DEYE_MAX_CHARGE_AMPS_LIMIT", "185")))
+    max_discharge_amps_limit: int = field(default_factory=lambda: int(os.getenv("DEYE_MAX_DISCHARGE_AMPS_LIMIT", "185")))
     default_max_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_CHARGE_AMPS", "60")))
     default_grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_GRID_CHARGE_AMPS", "40")))
     default_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_DISCHARGE_AMPS", "150")))

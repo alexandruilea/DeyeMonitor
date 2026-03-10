@@ -241,6 +241,14 @@ class DeyeApp(ctk.CTk):
             self._current_grid_charge = grid_charge
             self._current_max_discharge = max_discharge
             self._update_charge_display()
+            
+            # Initialize protection boost from inverter state so we don't reset
+            # charging speed on app restart (e.g. inverter at 180A, base is 40A → boost = 140A)
+            base_charge = self._get_base_charge_amps()
+            if max_charge > base_charge:
+                self._protection_boost_amps = max_charge - base_charge
+                self._protection_active = True
+                print(f"[INIT] Protection boost initialized: inverter={max_charge}A - base={base_charge}A = boost={self._protection_boost_amps}A")
         else:
             print("[INIT] Could not read charge settings from inverter")
         

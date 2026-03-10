@@ -312,13 +312,13 @@ class DeyeInverter:
         This controls how fast the battery charges FROM THE GRID.
         
         Args:
-            amps: Charging current in amps (0-185A)
+            amps: Charging current in amps (0 to max_charge_amps_limit)
             
         Returns:
             True if successful, False otherwise
         """
         # Clamp value to valid range
-        amps = max(0, min(185, amps))
+        amps = max(0, min(deye_config.max_charge_amps_limit, amps))
         # Write directly without the 1100 enable/disable sequence
         # This is how deye-controller does it
         return self._write_register(deye_config.reg_grid_charge_current, amps)
@@ -329,12 +329,12 @@ class DeyeInverter:
         This is the overall max charging speed from any source (PV + Grid).
         
         Args:
-            amps: Maximum charging current in amps (0-185A)
+            amps: Maximum charging current in amps (0 to max_charge_amps_limit)
             
         Returns:
             True if successful, False otherwise
         """
-        amps = max(0, min(185, amps))
+        amps = max(0, min(deye_config.max_charge_amps_limit, amps))
         return self._write_register(deye_config.reg_max_charge_amps, amps)
 
     def set_max_discharge_current(self, amps: int) -> bool:
@@ -342,10 +342,10 @@ class DeyeInverter:
         Set the maximum discharging current in amps.
         
         Args:
-            amps: Maximum discharging current in amps (0-185A)
+            amps: Maximum discharging current in amps (0 to max_discharge_amps_limit)
             
         Returns:
             True if successful, False otherwise
         """
-        amps = max(0, min(185, amps))
+        amps = max(0, min(deye_config.max_discharge_amps_limit, amps))
         return self._write_register(deye_config.reg_max_discharge_amps, amps)

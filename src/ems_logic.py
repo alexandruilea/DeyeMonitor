@@ -33,6 +33,8 @@ class LogicResult(Enum):
     WAIT_LV_RECOVERY = "Wait: LV Recovery Timer"
     WAIT_CHARGING = "Wait: SOC Charging"
     WAIT_OFF_GRID = "Wait: Off-Grid Blocked"
+    BLOCKED_BATTERY_LOW = "Blocked: Battery SOC Too Low"
+    WAIT_SOC_RECOVERY = "Wait: SOC Recovery"
     TAPO_OFFLINE = "HP: TAPO OFFLINE"
 
 
@@ -52,6 +54,7 @@ class LogicState:
     runtime_start: dict[int, Optional[float]] = None  # outlet_id -> runtime_start
     lv_shutdown: dict[int, bool] = None  # outlet_id -> was_shut_down_by_lv
     lv_recovery_timers: dict[int, Optional[float]] = None  # outlet_id -> recovery_timer_start
+    soc_shutdown: dict[int, bool] = None  # outlet_id -> was_shut_down_by_low_soc
     
     def __post_init__(self):
         if self.lv_timers is None:
@@ -62,6 +65,8 @@ class LogicState:
             self.lv_shutdown = {}
         if self.lv_recovery_timers is None:
             self.lv_recovery_timers = {}
+        if self.soc_shutdown is None:
+            self.soc_shutdown = {}
     
     def reset_lv_timer(self, outlet_id: int) -> None:
         """Reset the low-voltage timer for an outlet."""
@@ -121,6 +126,18 @@ class LogicState:
     def is_lv_shutdown(self, outlet_id: int) -> bool:
         """Check if outlet is in low-voltage shutdown state."""
         return self.lv_shutdown.get(outlet_id, False)
+    
+    def mark_soc_shutdown(self, outlet_id: int) -> None:
+        """Mark that an outlet was shut down due to low SOC."""
+        self.soc_shutdown[outlet_id] = True
+    
+    def clear_soc_shutdown(self, outlet_id: int) -> None:
+        """Clear the SOC shutdown flag for an outlet."""
+        self.soc_shutdown[outlet_id] = False
+    
+    def is_soc_shutdown(self, outlet_id: int) -> bool:
+        """Check if outlet is in SOC shutdown state."""
+        return self.soc_shutdown.get(outlet_id, False)
 
 
 class EMSLogic:
@@ -244,6 +261,7 @@ class EMSLogic:
                 if not (outlet.config.on_grid_always_on and data.is_grid_connected):
                     self.tapo.turn_off(outlet.config.outlet_id)
                     self.state.reset_runtime(outlet.config.outlet_id)
+                    self.state.mark_soc_shutdown(outlet.config.outlet_id)
                     return LogicResult.OFF_BATTERY_LOW, f"{outlet.config.name}: SOC {data.soc}%"
         
         # Second pass: Try to turn on outlets by priority
@@ -316,6 +334,29 @@ class EMSLogic:
                     return LogicResult.WAIT_LOW_VOLTAGE, f"{outlet.config.name}: {target_voltage:.1f}V < {outlet.config.lv_threshold}V (blocking SOC/Export)"
                 continue  # Voltage too low, skip this outlet
             
+            # SOC RECOVERY CHECK: If outlet was shut down due to low SOC, require SOC to
+            # reach the midpoint between stop and start SOC before allowing export/HV restart.
+            # This prevents rapid on/off cycling when SOC barely rises above stop_soc.
+            recovery_soc = (outlet.config.stop_soc + outlet.config.start_soc) // 2
+            if self.state.is_soc_shutdown(outlet.config.outlet_id):
+                if data.soc >= recovery_soc:
+                    self.state.clear_soc_shutdown(outlet.config.outlet_id)
+                else:
+                    # Still recovering - block export/HV triggers, show status
+                    blocked_trigger = ""
+                    if outlet.config.voltage_enabled and target_voltage >= outlet.config.hv_threshold:
+                        blocked_trigger = f", HV {target_voltage}V"
+                    if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
+                        blocked_trigger = f", Export {export_watts}W"
+                    return LogicResult.WAIT_SOC_RECOVERY, (
+                        f"{outlet.config.name}: SOC {data.soc}% < {recovery_soc}% recovery"
+                        f" (need midpoint of {outlet.config.stop_soc}%-{outlet.config.start_soc}%){blocked_trigger}"
+                    )
+            
+            # BATTERY SOC GUARD: If SOC-based control is enabled and battery is below stop SOC,
+            # block export and HV triggers to prevent on/off cycling conflicts.
+            soc_too_low = outlet.config.soc_enabled and data.soc <= outlet.config.stop_soc
+            
             # THREE INDEPENDENT TRIGGERS FOR TURNING ON (any one can activate if enabled):
             
             # Trigger 0: On-Grid Always On - if enabled and grid is connected, turn on
@@ -325,11 +366,15 @@ class EMSLogic:
             
             # Trigger 1: High voltage dump (battery voltage too high) - if voltage trigger enabled
             if outlet.config.voltage_enabled and target_voltage >= outlet.config.hv_threshold:
+                if soc_too_low:
+                    return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: HV {target_voltage}V but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_HV_DUMP, f"{outlet.config.name}: {target_voltage}V"
             
             # Trigger 2: Export dump (too much power being exported) - if export trigger enabled
             if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
+                if soc_too_low:
+                    return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: Export {export_watts}W but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_EXPORT_DUMP, f"{outlet.config.name}: {export_watts}W"
             
@@ -373,6 +418,8 @@ class EMSLogic:
             LogicResult.WAIT_LV_RECOVERY: "orange",
             LogicResult.WAIT_CHARGING: "gray",
             LogicResult.WAIT_OFF_GRID: "#E74C3C",
+            LogicResult.BLOCKED_BATTERY_LOW: "#E67E22",
+            LogicResult.WAIT_SOC_RECOVERY: "#E67E22",
             LogicResult.TAPO_OFFLINE: "gray",
         }
         return colors.get(result, "white")
