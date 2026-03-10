@@ -6,18 +6,29 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 
 - 📊 Real-time monitoring of solar, battery, and grid power
 - ⚡ Three-phase voltage and load monitoring
-- � **Charge Schedule Control** - Time-based automatic charge current adjustment
+- 🕐 **Charge Schedule Control** - Time-based automatic charge current adjustment
 - 🛡️ **Battery Boost Protection** - Automatically increases battery charging to absorb excess power when:
   - Export power approaches max sell limit
   - Phase voltage exceeds warning threshold
-- 🔥 Automatic heat pump control based on:
+  - Persists boost level across app restarts (reads current inverter state on startup)
+- 🌅 **Sunset-Aware Charging** - Dynamically adjusts charge rate throughout the day to reach target SOC by sunset:
+  - Offline astronomical calculations via `astral` library (no internet needed)
+  - Solar-curve-weighted algorithm (cos² from noon) for midday-heavy charging
+  - Configurable target SOC, buffer time, and battery capacity
+  - 10A step rounding and 10-second throttle to avoid excessive register writes
+  - Automatically coordinates with battery boost protection (protection yields when sunset charging is active)
+- 🔥 Automatic heat pump / consumer control based on:
   - Battery SOC thresholds
   - Grid export detection
   - High voltage dumping
+- 🔋 **SOC Recovery Hysteresis** - Prevents outlet on/off cycling when SOC is near thresholds:
+  - Outlets shut down at Stop SOC are blocked from export/HV restart until SOC recovers to midpoint of (Stop SOC + Start SOC)
+  - Prevents heatpump cycling when export limit is reached but battery is low
 - 🛡️ Safety features:
   - Phase overload protection
   - Critical undervoltage protection
   - Low voltage delay timer
+  - Separate charge/discharge hardware amp limits (multi-battery support)
 - 🎛️ Manual override mode
 - 🔧 Fully configurable parameters via `.env` file
 
@@ -76,12 +87,13 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 
 #### Inverter Power Limits (Model-Specific)
 
-| Variable                     | Description                              | Default |
-| ---------------------------- | ---------------------------------------- | ------- |
-| `DEYE_MAX_UPS_TOTAL_POWER`   | Maximum UPS output across all phases (W) | 16000   |
-| `DEYE_PHASE_MAX`             | Maximum safe power per phase (W)         | 7000    |
-| `DEYE_SAFETY_LV`             | Critical low voltage threshold (V)       | 185.0   |
-| `DEYE_MAX_CHARGE_AMPS_LIMIT` | Hardware max charging current (A)        | 185     |
+| Variable                        | Description                              | Default |
+| ------------------------------- | ---------------------------------------- | ------- |
+| `DEYE_MAX_UPS_TOTAL_POWER`      | Maximum UPS output across all phases (W) | 16000   |
+| `DEYE_PHASE_MAX`                | Maximum safe power per phase (W)         | 7000    |
+| `DEYE_SAFETY_LV`                | Critical low voltage threshold (V)       | 185.0   |
+| `DEYE_MAX_CHARGE_AMPS_LIMIT`    | Hardware max charging current (A)        | 185     |
+| `DEYE_MAX_DISCHARGE_AMPS_LIMIT` | Hardware max discharging current (A)     | 185     |
 
 #### Inverter Register Addresses (Model-Specific)
 
@@ -103,6 +115,18 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 | `PROTECTION_VOLTAGE_RECOVERY`       | Reduce protection below this voltage (V)     | 249.0   |
 | `PROTECTION_CHARGE_STEP`            | Increase charging by this many Amps per step | 10      |
 | `PROTECTION_ADJUSTMENT_INTERVAL`    | Seconds between adjustments (stabilization)  | 10      |
+
+#### Sunset Charging Settings
+
+| Variable                  | Description                                          | Default |
+| ------------------------- | ---------------------------------------------------- | ------- |
+| `SOLAR_LATITUDE`          | Your location latitude                               | 47.00   |
+| `SOLAR_LONGITUDE`         | Your location longitude                              | 22.00   |
+| `BATTERY_CAPACITY_AH`     | Total battery capacity in Amp-hours                  | 600     |
+| `SUNSET_TARGET_SOC`       | Target SOC to reach by sunset (%)                    | 100     |
+| `SUNSET_BUFFER_MINUTES`   | Finish charging this many minutes before sunset      | 60      |
+| `SUNSET_MIN_CHARGE_AMPS`  | Minimum charge rate when sunset charging is active   | 10      |
+| `SUNSET_CHARGING_ENABLED` | Enable sunset-aware charging at startup (true/false) | true    |
 
 #### Tapo Smart Plug Outlets
 

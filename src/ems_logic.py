@@ -337,10 +337,13 @@ class EMSLogic:
             # SOC RECOVERY CHECK: If outlet was shut down due to low SOC, require SOC to
             # reach the midpoint between stop and start SOC before allowing export/HV restart.
             # This prevents rapid on/off cycling when SOC barely rises above stop_soc.
+            # Once recovered, export/HV triggers are unblocked — but SOC auto-start still
+            # requires reaching start_soc as normal.
             recovery_soc = (outlet.config.stop_soc + outlet.config.start_soc) // 2
             if self.state.is_soc_shutdown(outlet.config.outlet_id):
                 if data.soc >= recovery_soc:
                     self.state.clear_soc_shutdown(outlet.config.outlet_id)
+                    # Don't auto-restart here — fall through to normal triggers below
                 else:
                     # Still recovering - block export/HV triggers, show status
                     blocked_trigger = ""

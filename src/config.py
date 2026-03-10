@@ -171,8 +171,21 @@ class OverpowerProtectionConfig:
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("PROTECTION_ENABLED_AT_STARTUP", "false").lower() == "true")
 
 
+@dataclass
+class SunsetChargingConfig:
+    """Configuration for sunset-aware charging."""
+    latitude: float = field(default_factory=lambda: float(os.getenv("SOLAR_LATITUDE", "47.00")))
+    longitude: float = field(default_factory=lambda: float(os.getenv("SOLAR_LONGITUDE", "22.00")))
+    battery_capacity_ah: int = field(default_factory=lambda: int(os.getenv("BATTERY_CAPACITY_AH", "600")))
+    target_soc: int = field(default_factory=lambda: int(os.getenv("SUNSET_TARGET_SOC", "100")))
+    buffer_minutes: int = field(default_factory=lambda: int(os.getenv("SUNSET_BUFFER_MINUTES", "60")))
+    min_charge_amps: int = field(default_factory=lambda: int(os.getenv("SUNSET_MIN_CHARGE_AMPS", "10")))
+    enabled_at_startup: bool = field(default_factory=lambda: os.getenv("SUNSET_CHARGING_ENABLED", "true").lower() == "true")
+
+
 # Global config instances
 deye_config = DeyeConfig()
 outlet_configs = load_outlet_configs()
 ems_defaults = EMSDefaults()
 protection_config = OverpowerProtectionConfig()
+sunset_config = SunsetChargingConfig()

@@ -22,6 +22,7 @@ from src.ui_components import (
     ErrorLogViewer,
     TimeSchedulePanel,
     OverpowerProtectionPanel,
+    SunsetChargingPanel,
     BatteryStatsDialog,
 )
 
@@ -58,6 +59,11 @@ class DeyeApp(ctk.CTk):
         self._protection_boost_amps = 0  # Current boost amount added on top of schedule
         self._protection_active = False  # Whether protection is currently boosting
         self._last_protection_adjustment = 0.0  # Timestamp of last charge adjustment
+        
+        # Sunset charging state
+        self._sunset_boost_amps = 0  # Current sunset boost amount
+        self._sunset_active = False  # Whether sunset charging is actively boosting
+        self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
         
         # Track if main loop has started (for safe error logging from threads)
         self._main_loop_started = False
@@ -172,6 +178,13 @@ class DeyeApp(ctk.CTk):
         )
         self.protection_panel.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
+        # Sunset Charging Panel
+        self.sunset_panel = SunsetChargingPanel(
+            self.scrollable,
+            on_settings_change=self._on_sunset_change
+        )
+        self.sunset_panel.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        
         # Track last applied schedule to avoid redundant writes
         self._last_applied_schedule = None
         
@@ -186,14 +199,14 @@ class DeyeApp(ctk.CTk):
             self.cfg,
             on_manual_toggle=self._on_manual_toggle
         )
-        self.settings.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+        self.settings.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 9
+        current_row = 10
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -424,6 +437,162 @@ class DeyeApp(ctk.CTk):
                 self._last_applied_schedule = None
                 print("[PROTECTION] Disabled - clearing boost")
 
+    def _on_sunset_change(self) -> None:
+        """Handle sunset charging settings change."""
+        if not self.sunset_panel.is_enabled():
+            if self._sunset_boost_amps > 0:
+                self._sunset_boost_amps = 0
+                self._sunset_active = False
+                self._last_applied_schedule = None
+                print("[SUNSET] Disabled - clearing boost")
+
+    def _process_sunset_charging(self, data) -> None:
+        """
+        Process sunset-aware charging logic.
+        
+        Uses a solar-curve-weighted algorithm: charges more aggressively around
+        solar noon (when PV production peaks and electricity is cheap) and less
+        in the early morning and late afternoon. The weighting follows a cosine
+        curve from sunrise to the deadline, peaking at solar noon.
+        """
+        from astral import LocationInfo
+        from astral.sun import sun
+        from datetime import datetime, timezone, timedelta
+        import math
+        
+        if not self.sunset_panel.is_enabled():
+            if self._sunset_active:
+                self._sunset_boost_amps = 0
+                self._sunset_active = False
+                self._last_applied_schedule = None
+            self.after(0, lambda: self.sunset_panel.update_state("--:--", None, 0, False))
+            return
+        
+        # Throttle adjustments to at most once every 10 seconds
+        current_time = time.time()
+        if current_time - self._last_sunset_adjustment < 10:
+            return
+        
+        settings = self.sunset_panel.get_settings()
+        
+        # Calculate sun times
+        loc = LocationInfo(latitude=settings["latitude"], longitude=settings["longitude"])
+        now = datetime.now(timezone.utc)
+        try:
+            s = sun(loc.observer, date=now.date())
+            sunrise_utc = s["sunrise"]
+            sunset_utc = s["sunset"]
+            noon_utc = s["noon"]
+        except Exception:
+            self.after(0, lambda: self.sunset_panel.update_state("Error", None, 0, False))
+            return
+        
+        # Effective deadline = sunset minus buffer
+        deadline = sunset_utc - timedelta(minutes=settings["buffer_minutes"])
+        hours_left = (deadline - now).total_seconds() / 3600.0
+        
+        # Format sunset in local time
+        sunset_local = sunset_utc.astimezone()
+        sunset_str = sunset_local.strftime("%H:%M")
+        
+        current_soc = data.soc
+        target_soc = settings["target_soc"]
+        capacity_ah = settings["battery_capacity_ah"]
+        min_charge = settings["min_charge_amps"]
+        
+        if current_soc >= target_soc or hours_left <= 0:
+            # Already at target or past deadline
+            if self._sunset_active:
+                self._sunset_boost_amps = 0
+                self._sunset_active = False
+                self._last_applied_schedule = None
+            self.after(0, lambda: self.sunset_panel.update_state(
+                sunset_str, hours_left if hours_left > 0 else 0, 0, False))
+            return
+        
+        # Solar-curve-weighted charging calculation
+        # Weight = cos²(angle from noon) → peaks at solar noon, tapers to edges
+        remaining_ah = capacity_ah * (target_soc - current_soc) / 100.0
+        
+        # Calculate solar day span for weighting (from sunrise to deadline)
+        day_span = (deadline - sunrise_utc).total_seconds()
+        
+        if day_span <= 0:
+            # Fallback: flat rate if something is off
+            required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
+        else:
+            # Current position as fraction of solar day (0=sunrise, 1=deadline)
+            now_frac = (now - sunrise_utc).total_seconds() / day_span
+            noon_frac = (noon_utc - sunrise_utc).total_seconds() / day_span
+            now_frac = max(0.0, min(1.0, now_frac))
+            
+            # Weight at current time: cos²(π × (t - noon_frac))
+            # Peaks at solar noon (weight=1.0), tapers to ~0 at edges
+            def solar_weight(t_frac):
+                angle = math.pi * (t_frac - noon_frac)
+                return max(0.05, math.cos(angle) ** 2)  # Floor of 0.05 to avoid zero
+            
+            # Integrate remaining weighted hours from now to deadline using 15-min steps
+            steps = max(1, int(hours_left * 4))
+            dt = hours_left / steps
+            total_weighted_hours = 0.0
+            for i in range(steps):
+                t = now_frac + (i + 0.5) * (1.0 - now_frac) / steps
+                total_weighted_hours += solar_weight(t) * dt
+            
+            # Current weight determines how much of the remaining Ah to charge now
+            current_weight = solar_weight(now_frac)
+            
+            if total_weighted_hours > 0:
+                required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
+            else:
+                required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
+        
+        required_amps = max(min_charge, min(required_amps, deye_config.max_charge_amps_limit))
+        
+        # Compare with current base charge rate
+        base_charge = self._get_base_charge_amps()
+        
+        # Add any existing protection boost
+        effective_charge = base_charge + self._protection_boost_amps
+        
+        if required_amps > effective_charge:
+            # Need more than what schedule+protection provides
+            sunset_boost = required_amps - base_charge - self._protection_boost_amps
+            sunset_boost = max(0, sunset_boost)
+            
+            # Round to 10A steps to avoid writing every single amp change
+            sunset_boost = ((sunset_boost + 9) // 10) * 10
+            
+            if sunset_boost != self._sunset_boost_amps:
+                self._sunset_boost_amps = sunset_boost
+                self._sunset_active = True
+                self._last_sunset_adjustment = current_time
+                target_charge = base_charge + self._protection_boost_amps + self._sunset_boost_amps
+                target_charge = min(target_charge, deye_config.max_charge_amps_limit)
+                
+                print(f"[SUNSET] Boosting: Base={base_charge}A + Protection={self._protection_boost_amps}A"
+                      f" + Sunset={self._sunset_boost_amps}A = {target_charge}A"
+                      f" (need {remaining_ah:.0f}Ah in {hours_left:.1f}h, weight={current_weight:.2f},"
+                      f" SOC {current_soc}%→{target_soc}%)")
+                
+                if self.inverter.set_max_charge_current(target_charge):
+                    self._current_max_charge = target_charge
+                    self._update_charge_display()
+                    self._log_error(
+                        f"Sunset charging: {target_charge}A "
+                        f"({remaining_ah:.0f}Ah in {hours_left:.1f}h, SOC {current_soc}%→{target_soc}%)")
+        else:
+            # Base + protection is enough, no sunset boost needed
+            if self._sunset_boost_amps > 0:
+                self._sunset_boost_amps = 0
+                self._sunset_active = False
+                self._last_applied_schedule = None
+                print(f"[SUNSET] Base charge ({effective_charge}A) sufficient for {required_amps}A required")
+        
+        self.after(0, lambda: self.sunset_panel.update_state(
+            sunset_str, hours_left, required_amps, self._sunset_active))
+
     def _get_base_charge_amps(self) -> int:
         """Get the base charge amps from schedule or defaults (before protection boost)."""
         if self.schedule_panel.is_enabled():
@@ -506,26 +675,36 @@ class DeyeApp(ctk.CTk):
                     self._log_error(f"Protection: Boosting to {target_charge}A (export={export_power}W, voltage={max_voltage:.1f}V)")
                     
         elif can_recover and self._protection_boost_amps > 0:
-            # Reduce boost by one step
-            new_boost = max(0, self._protection_boost_amps - charge_step)
-            if new_boost != self._protection_boost_amps:
-                self._protection_boost_amps = new_boost
-                self._last_protection_adjustment = current_time
-                target_charge = base_charge + self._protection_boost_amps
-                
-                if self._protection_boost_amps == 0:
+            # If sunset charging is active and driving a higher rate anyway,
+            # silently clear protection boost without writing to the register
+            # to avoid fighting between the two systems.
+            if self._sunset_active and self._sunset_boost_amps > 0:
+                if self._protection_boost_amps > 0:
+                    print(f"[PROTECTION] Yielding to sunset charging (sunset boost={self._sunset_boost_amps}A) - clearing protection boost silently")
+                    self._protection_boost_amps = 0
                     self._protection_active = False
-                    print(f"[PROTECTION] RECOVERED: Back to base {target_charge}A")
-                else:
-                    print(f"[PROTECTION] Reducing boost to +{self._protection_boost_amps}A = {target_charge}A")
-                
-                if self.inverter.set_max_charge_current(target_charge):
-                    self._current_max_charge = target_charge
-                    self._update_charge_display()
+                    self._last_protection_adjustment = current_time
+            else:
+                # Normal recovery - reduce boost by one step
+                new_boost = max(0, self._protection_boost_amps - charge_step)
+                if new_boost != self._protection_boost_amps:
+                    self._protection_boost_amps = new_boost
+                    self._last_protection_adjustment = current_time
+                    target_charge = base_charge + self._protection_boost_amps
+                    
                     if self._protection_boost_amps == 0:
-                        self._log_error(f"Protection: Recovered, back to {target_charge}A")
+                        self._protection_active = False
+                        print(f"[PROTECTION] RECOVERED: Back to base {target_charge}A")
                     else:
-                        self._log_error(f"Protection: Reduced to {target_charge}A")
+                        print(f"[PROTECTION] Reducing boost to +{self._protection_boost_amps}A = {target_charge}A")
+                    
+                    if self.inverter.set_max_charge_current(target_charge):
+                        self._current_max_charge = target_charge
+                        self._update_charge_display()
+                        if self._protection_boost_amps == 0:
+                            self._log_error(f"Protection: Recovered, back to {target_charge}A")
+                        else:
+                            self._log_error(f"Protection: Reduced to {target_charge}A")
         
         # Update protection state display
         self.after(0, lambda: self.protection_panel.update_protection_state(
@@ -592,6 +771,8 @@ class DeyeApp(ctk.CTk):
                     self._process_schedule()
                     # Process overpower protection (may override schedule charge values)
                     self._process_overpower_protection(data)
+                    # Process sunset charging (may further boost if needed to reach target by sunset)
+                    self._process_sunset_charging(data)
                 else:
                     self.after(0, lambda: self.header.update_status("CONNECTING...", "orange"))
             

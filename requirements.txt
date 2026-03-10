@@ -11,3 +11,6 @@ tapo>=0.8.8
 
 # Environment Configuration
 python-dotenv>=1.0.0
+
+# Astronomical Calculations (sunset time)
+astral>=3.2

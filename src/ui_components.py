@@ -5,7 +5,7 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable
 
-from src.config import protection_config, deye_config
+from src.config import protection_config, deye_config, sunset_config
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -1138,6 +1138,181 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             )
         else:
             self.lbl_protection_state.configure(text="Protection: Standby", text_color="#2ECC71")
+
+
+class SunsetChargingPanel(ctk.CTkFrame):
+    """
+    Panel for sunset-aware charging.
+    
+    Calculates sunset time astronomically and dynamically adjusts max charge rate
+    to ensure the battery reaches the target SOC by sunset.
+    """
+    
+    def __init__(self, parent, on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
+        self.on_settings_change = on_settings_change
+        
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(
+            header_frame, text="\u2600 SUNSET CHARGING",
+            font=("Roboto", 14, "bold"),
+            text_color="#F39C12"
+        ).grid(row=0, column=0, sticky="w")
+        
+        # Enable/Disable switch
+        self.enabled_var = ctk.BooleanVar(value=sunset_config.enabled_at_startup)
+        self.enable_switch = ctk.CTkSwitch(
+            header_frame, text="Enable",
+            variable=self.enabled_var,
+            font=("Roboto", 11, "bold"),
+            command=self._on_enable_toggle
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        if sunset_config.enabled_at_startup:
+            self.enable_switch.select()
+        
+        # Status label
+        _startup_enabled = sunset_config.enabled_at_startup
+        self.lbl_status = ctk.CTkLabel(
+            header_frame, text="Active" if _startup_enabled else "Disabled",
+            font=("Roboto", 11),
+            text_color="#2ECC71" if _startup_enabled else "gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        
+        # Settings container
+        settings_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        settings_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        settings_frame.grid_columnconfigure((1, 3, 5, 7, 9, 11), weight=1)
+        
+        # Latitude
+        ctk.CTkLabel(settings_frame, text="Lat:", font=("Roboto", 10, "bold"),
+                      text_color="#F39C12").grid(row=0, column=0, padx=(10, 2), pady=8, sticky="w")
+        self.latitude = ctk.CTkEntry(settings_frame, width=65, justify="center")
+        self.latitude.grid(row=0, column=1, padx=2, pady=8)
+        self.latitude.insert(0, str(sunset_config.latitude))
+        
+        # Longitude
+        ctk.CTkLabel(settings_frame, text="Lon:", font=("Roboto", 10, "bold"),
+                      text_color="#F39C12").grid(row=0, column=2, padx=(10, 2), pady=8, sticky="w")
+        self.longitude = ctk.CTkEntry(settings_frame, width=65, justify="center")
+        self.longitude.grid(row=0, column=3, padx=2, pady=8)
+        self.longitude.insert(0, str(sunset_config.longitude))
+        
+        # Battery Capacity (Ah)
+        ctk.CTkLabel(settings_frame, text="Battery:", font=("Roboto", 10),
+                      text_color="#3498DB").grid(row=0, column=4, padx=(10, 2), pady=8, sticky="w")
+        self.battery_capacity = ctk.CTkEntry(settings_frame, width=55, justify="center")
+        self.battery_capacity.grid(row=0, column=5, padx=2, pady=8)
+        self.battery_capacity.insert(0, str(sunset_config.battery_capacity_ah))
+        ctk.CTkLabel(settings_frame, text="Ah", font=("Roboto", 10)).grid(row=0, column=6, padx=(0, 5), pady=8)
+        
+        # Target SOC
+        ctk.CTkLabel(settings_frame, text="Target:", font=("Roboto", 10),
+                      text_color="#2ECC71").grid(row=0, column=7, padx=(10, 2), pady=8, sticky="w")
+        self.target_soc = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.target_soc.grid(row=0, column=8, padx=2, pady=8)
+        self.target_soc.insert(0, str(sunset_config.target_soc))
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=0, column=9, padx=(0, 5), pady=8)
+        
+        # Buffer time before sunset
+        ctk.CTkLabel(settings_frame, text="Buffer:", font=("Roboto", 10),
+                      text_color="#95A5A6").grid(row=0, column=10, padx=(10, 2), pady=8, sticky="w")
+        self.buffer_minutes = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.buffer_minutes.grid(row=0, column=11, padx=2, pady=8)
+        self.buffer_minutes.insert(0, str(sunset_config.buffer_minutes))
+        ctk.CTkLabel(settings_frame, text="min", font=("Roboto", 10)).grid(row=0, column=12, padx=(0, 10), pady=8)
+        
+        # Second row: Min charge amps
+        ctk.CTkLabel(settings_frame, text="Min Charge:", font=("Roboto", 10),
+                      text_color="#2ECC71").grid(row=1, column=0, padx=(10, 2), pady=8, sticky="w")
+        self.min_charge = ctk.CTkEntry(settings_frame, width=45, justify="center")
+        self.min_charge.grid(row=1, column=1, padx=2, pady=8)
+        self.min_charge.insert(0, str(sunset_config.min_charge_amps))
+        ctk.CTkLabel(settings_frame, text="A", font=("Roboto", 10)).grid(row=1, column=2, padx=(0, 5), pady=8, sticky="w")
+        
+        # State display
+        state_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        state_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        state_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        
+        self.lbl_sunset_time = ctk.CTkLabel(
+            state_frame, text="Sunset: --:--",
+            font=("Roboto", 11, "bold"), text_color="#F39C12"
+        )
+        self.lbl_sunset_time.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        
+        self.lbl_time_remaining = ctk.CTkLabel(
+            state_frame, text="Time left: --h --m",
+            font=("Roboto", 11, "bold"), text_color="#95A5A6"
+        )
+        self.lbl_time_remaining.grid(row=0, column=1, padx=10, pady=5)
+        
+        self.lbl_required_amps = ctk.CTkLabel(
+            state_frame, text="Required: --A",
+            font=("Roboto", 11, "bold"), text_color="#3498DB"
+        )
+        self.lbl_required_amps.grid(row=0, column=2, padx=10, pady=5, sticky="e")
+    
+    def _on_enable_toggle(self) -> None:
+        """Handle enable/disable toggle."""
+        enabled = self.enabled_var.get()
+        self.lbl_status.configure(
+            text="Active" if enabled else "Disabled",
+            text_color="#2ECC71" if enabled else "gray"
+        )
+        if self.on_settings_change:
+            self.on_settings_change()
+    
+    def is_enabled(self) -> bool:
+        return self.enabled_var.get()
+    
+    def get_settings(self) -> dict:
+        """Get current settings from UI fields."""
+        try:
+            return {
+                "latitude": float(self.latitude.get()),
+                "longitude": float(self.longitude.get()),
+                "battery_capacity_ah": int(self.battery_capacity.get()),
+                "target_soc": int(self.target_soc.get()),
+                "buffer_minutes": int(self.buffer_minutes.get()),
+                "min_charge_amps": int(self.min_charge.get()),
+            }
+        except (ValueError, TypeError):
+            return {
+                "latitude": sunset_config.latitude,
+                "longitude": sunset_config.longitude,
+                "battery_capacity_ah": sunset_config.battery_capacity_ah,
+                "target_soc": sunset_config.target_soc,
+                "buffer_minutes": sunset_config.buffer_minutes,
+                "min_charge_amps": sunset_config.min_charge_amps,
+            }
+    
+    def update_state(self, sunset_str: str, hours_left: float, required_amps: int, active: bool) -> None:
+        """Update the state display labels."""
+        self.lbl_sunset_time.configure(text=f"Sunset: {sunset_str}")
+        
+        if hours_left is not None and hours_left > 0:
+            h = int(hours_left)
+            m = int((hours_left - h) * 60)
+            self.lbl_time_remaining.configure(
+                text=f"Time left: {h}h {m:02d}m",
+                text_color="#F39C12" if hours_left < 2 else "#95A5A6"
+            )
+        else:
+            self.lbl_time_remaining.configure(text="After sunset", text_color="#E74C3C")
+        
+        if active:
+            color = "#E74C3C" if required_amps > 100 else "#F39C12" if required_amps > 50 else "#2ECC71"
+            self.lbl_required_amps.configure(text=f"Required: {required_amps}A", text_color=color)
+        else:
+            self.lbl_required_amps.configure(text="Standby", text_color="gray")
 
 
 class BatteryStatsDialog(ctk.CTkToplevel):
