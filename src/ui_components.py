@@ -162,7 +162,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
         ).grid(row=5, column=1, sticky="e", padx=2, pady=8)
         
         self.phase_selector = ctk.CTkSegmentedButton(
-            self, values=["L1", "L2", "L3"],
+            self, values=["L1", "L2", "L3", "ANY"],
             variable=variables["target_phase"],
             height=24
         )

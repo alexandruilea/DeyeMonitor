@@ -68,7 +68,7 @@ class OutletConfig:
     lv_recovery_voltage: float = 220.0  # Voltage must exceed this for recovery
     lv_recovery_delay: int = 300  # Seconds voltage must stay above recovery level (default 5 min)
     headroom: int = 4000
-    target_phase: str = "L1"
+    target_phase: str = "ANY"
     # Trigger enable flags
     soc_enabled: bool = True  # Enable SOC-based trigger
     voltage_enabled: bool = True  # Enable voltage-based trigger (HV/LV)

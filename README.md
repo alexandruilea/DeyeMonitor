@@ -149,18 +149,19 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 
 #### Outlet Control
 
-| Parameter         | Description                                  | Default |
-| ----------------- | -------------------------------------------- | ------- |
-| Start SOC         | Battery % to start outlet                    | 70%     |
-| Stop SOC          | Battery % to stop outlet                     | 32%     |
-| Headroom          | Required watts available on target phase     | 4000W   |
-| Phase Max         | Maximum watts per phase before safety cutoff | 7000W   |
-| High V            | Voltage threshold to trigger HV dump         | 252V    |
-| Low V             | Voltage threshold to turn off                | 210V    |
-| LV Delay          | Seconds to wait before LV shutoff            | 10s     |
-| LV Recovery V     | Voltage required for recovery                | 220V    |
-| LV Recovery Delay | Seconds voltage must stay above recovery     | 300s    |
-| Critical LV       | Safety voltage cutoff (immediate)            | 185V    |
+| Parameter         | Description                                       | Default |
+| ----------------- | ------------------------------------------------- | ------- |
+| Start SOC         | Battery % to start outlet                         | 70%     |
+| Stop SOC          | Battery % to stop outlet                          | 32%     |
+| Headroom          | Required watts available on target phase          | 4000W   |
+| Phase             | Phase to monitor: L1, L2, L3, or ANY (all phases) | ANY     |
+| Phase Max         | Maximum watts per phase before safety cutoff      | 7000W   |
+| High V            | Voltage threshold to trigger HV dump              | 252V    |
+| Low V             | Voltage threshold to turn off                     | 210V    |
+| LV Delay          | Seconds to wait before LV shutoff                 | 10s     |
+| LV Recovery V     | Voltage required for recovery                     | 220V    |
+| LV Recovery Delay | Seconds voltage must stay above recovery          | 300s    |
+| Critical LV       | Safety voltage cutoff (immediate)                 | 185V    |
 
 ## Usage
 

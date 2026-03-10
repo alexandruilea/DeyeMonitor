@@ -154,6 +154,21 @@ class EMSLogic:
         self._last_result: Optional[LogicResult] = None
         self._last_message: str = ""
 
+    @staticmethod
+    def _resolve_phase(target_phase: str, voltages: list, ups_loads: list, phase_max: int):
+        """Resolve voltage and headroom for a target phase.
+        
+        For L1/L2/L3: returns that phase's voltage and headroom.
+        For ANY: returns (max_voltage for HV, min_voltage for LV, min_headroom).
+        Returns (hv_voltage, lv_voltage, available_headroom).
+        """
+        idx = EMSLogic.PHASE_MAP.get(target_phase)
+        if idx is not None:
+            v = voltages[idx]
+            return v, v, phase_max - ups_loads[idx]
+        # ANY: HV uses max (any phase spiking triggers), LV uses min (any phase dropping triggers)
+        return max(voltages), min(voltages), min(phase_max - load for load in ups_loads)
+
     def process(self, data: InverterData, params: EMSParameters) -> tuple[LogicResult, str]:
         """
         Process EMS logic based on current inverter data and parameters.
@@ -239,17 +254,18 @@ class EMSLogic:
                 return LogicResult.OFF_OFF_GRID, f"{outlet.config.name}: Off-Grid Mode disabled"
             
             # Get outlet-specific parameters
-            target_idx = self.PHASE_MAP.get(outlet.config.target_phase, 0)
-            target_voltage = data.voltages[target_idx]
+            hv_voltage, lv_voltage, _ = self._resolve_phase(
+                outlet.config.target_phase, data.voltages, data.ups_loads, params.phase_max
+            )
             
             # Check undervoltage timer
-            if outlet.config.voltage_enabled and target_voltage < outlet.config.lv_threshold:
+            if outlet.config.voltage_enabled and lv_voltage < outlet.config.lv_threshold:
                 self.state.start_lv_timer(outlet.config.outlet_id)
                 if self.state.lv_timer_elapsed(outlet.config.outlet_id, outlet.config.lv_delay):
                     self.tapo.turn_off(outlet.config.outlet_id)
                     self.state.reset_runtime(outlet.config.outlet_id)
                     self.state.mark_lv_shutdown(outlet.config.outlet_id)  # Mark as LV shutdown
-                    return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: {target_voltage}V < {outlet.config.lv_threshold}V"
+                    return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: {lv_voltage}V < {outlet.config.lv_threshold}V"
                 remaining = outlet.config.lv_delay - (time.time() - self.state.lv_timers[outlet.config.outlet_id])
                 return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: Timer {remaining:.0f}s"
             else:
@@ -286,13 +302,14 @@ class EMSLogic:
                         continue  # Priority 1 must be running first
             
             # Get outlet-specific parameters
-            target_idx = self.PHASE_MAP.get(outlet.config.target_phase, 0)
-            target_voltage = data.voltages[target_idx]
+            hv_voltage, lv_voltage, available_headroom = self._resolve_phase(
+                outlet.config.target_phase, data.voltages, data.ups_loads, params.phase_max
+            )
             export_watts = abs(data.grid_power) if data.grid_power < 0 else 0
             
             # LOW VOLTAGE RECOVERY CHECK: If outlet was shut down by low voltage, check recovery
             if self.state.is_lv_shutdown(outlet.config.outlet_id):
-                if target_voltage >= outlet.config.lv_recovery_voltage:
+                if lv_voltage >= outlet.config.lv_recovery_voltage:
                     # Voltage is above recovery threshold, start/continue recovery timer
                     self.state.start_lv_recovery(outlet.config.outlet_id)
                     if self.state.lv_recovery_elapsed(outlet.config.outlet_id, outlet.config.lv_recovery_delay):
@@ -301,14 +318,11 @@ class EMSLogic:
                     else:
                         # Still recovering
                         remaining = outlet.config.lv_recovery_delay - (time.time() - self.state.lv_recovery_timers[outlet.config.outlet_id])
-                        return LogicResult.WAIT_LV_RECOVERY, f"{outlet.config.name}: {remaining:.0f}s ({target_voltage:.1f}V >= {outlet.config.lv_recovery_voltage}V)"
+                        return LogicResult.WAIT_LV_RECOVERY, f"{outlet.config.name}: {remaining:.0f}s ({lv_voltage:.1f}V >= {outlet.config.lv_recovery_voltage}V)"
                 else:
                     # Voltage still too low, reset recovery timer and show blocked status
                     self.state.reset_lv_recovery(outlet.config.outlet_id)
-                    return LogicResult.WAIT_LV_RECOVERY, f"{outlet.config.name}: {target_voltage:.1f}V < {outlet.config.lv_recovery_voltage}V"
-            
-            # Calculate available headroom on the monitored phase
-            available_headroom = params.phase_max - data.ups_loads[target_idx]
+                    return LogicResult.WAIT_LV_RECOVERY, f"{outlet.config.name}: {lv_voltage:.1f}V < {outlet.config.lv_recovery_voltage}V"
             
             # Check if we have enough headroom for this outlet
             if available_headroom < outlet.config.headroom:
@@ -321,7 +335,7 @@ class EMSLogic:
             
             # VOLTAGE SAFETY CHECK: Do not turn on if voltage is below low voltage threshold
             # This prevents turning on during low voltage conditions regardless of other triggers
-            if outlet.config.voltage_enabled and target_voltage < outlet.config.lv_threshold:
+            if outlet.config.voltage_enabled and lv_voltage < outlet.config.lv_threshold:
                 # Check if any trigger would activate if voltage was OK
                 would_activate = False
                 if outlet.config.soc_enabled and data.soc >= outlet.config.start_soc:
@@ -331,7 +345,7 @@ class EMSLogic:
                 
                 # Only show low voltage block if a trigger is actually trying to activate
                 if would_activate:
-                    return LogicResult.WAIT_LOW_VOLTAGE, f"{outlet.config.name}: {target_voltage:.1f}V < {outlet.config.lv_threshold}V (blocking SOC/Export)"
+                    return LogicResult.WAIT_LOW_VOLTAGE, f"{outlet.config.name}: {lv_voltage:.1f}V < {outlet.config.lv_threshold}V (blocking SOC/Export)"
                 continue  # Voltage too low, skip this outlet
             
             # SOC RECOVERY CHECK: If outlet was shut down due to low SOC, require SOC to
@@ -347,8 +361,8 @@ class EMSLogic:
                 else:
                     # Still recovering - block export/HV triggers, show status
                     blocked_trigger = ""
-                    if outlet.config.voltage_enabled and target_voltage >= outlet.config.hv_threshold:
-                        blocked_trigger = f", HV {target_voltage}V"
+                    if outlet.config.voltage_enabled and hv_voltage >= outlet.config.hv_threshold:
+                        blocked_trigger = f", HV {hv_voltage}V"
                     if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
                         blocked_trigger = f", Export {export_watts}W"
                     return LogicResult.WAIT_SOC_RECOVERY, (
@@ -368,11 +382,11 @@ class EMSLogic:
                 return LogicResult.ON_GRID_ALWAYS_ON, f"{outlet.config.name}: Grid connected"
             
             # Trigger 1: High voltage dump (battery voltage too high) - if voltage trigger enabled
-            if outlet.config.voltage_enabled and target_voltage >= outlet.config.hv_threshold:
+            if outlet.config.voltage_enabled and hv_voltage >= outlet.config.hv_threshold:
                 if soc_too_low:
-                    return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: HV {target_voltage}V but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
+                    return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: HV {hv_voltage}V but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
                 self.tapo.turn_on(outlet.config.outlet_id)
-                return LogicResult.ON_HV_DUMP, f"{outlet.config.name}: {target_voltage}V"
+                return LogicResult.ON_HV_DUMP, f"{outlet.config.name}: {hv_voltage}V"
             
             # Trigger 2: Export dump (too much power being exported) - if export trigger enabled
             if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
