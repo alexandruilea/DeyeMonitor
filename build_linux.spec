@@ -31,6 +31,8 @@ a = Analysis(
         'src.tapo_manager',
         'src.ems_logic',
         'src.ui_components',
+        'astral',
+        'astral.sun',
     ],
     hookspath=[],
     hooksconfig={},
