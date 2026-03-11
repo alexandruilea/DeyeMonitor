@@ -13,4 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt pyinstaller
 COPY . .
 
 RUN pyinstaller build_linux.spec --clean --distpath /out \
-    && chmod +x /out/DeyeEMS
+    && chmod +x /out/DeyeEMS \
+    && tar cf /out/DeyeEMS.tar -C /out DeyeEMS
+
+# Extract with: docker run --rm -v ./dist_linux:/dist deye-linux-build
+# Then on Linux: tar xf DeyeEMS.tar (preserves executable permission)
+CMD cp /out/DeyeEMS.tar /dist/DeyeEMS.tar && echo "Built: /dist/DeyeEMS.tar (extract with: tar xf DeyeEMS.tar)"

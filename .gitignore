@@ -45,4 +45,4 @@ env/
 Thumbs.db
 /.vs
 DeyeMonitor.zip
-dist_linux/DeyeEMS
+dist_linux/
