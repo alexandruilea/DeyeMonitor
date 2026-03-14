@@ -73,6 +73,7 @@ class DeyeInverter:
     
     def __init__(self):
         self._modbus: Optional[PySolarmanV5] = None
+        self._write_cache: dict = {}  # {register: (value, timestamp)} - tracks last written value/time per register
 
     def _connect(self) -> bool:
         """Establish connection to the inverter."""
@@ -254,20 +255,34 @@ class DeyeInverter:
                 pass
             self._modbus = None
 
-    def _write_register(self, register: int, value: int, retries: int = 3) -> bool:
+    def _write_register(self, register: int, value: int, retries: int = 3, force: bool = False) -> bool:
         """
         Write a single value to a holding register.
         Uses write_multiple_holding_registers as per deye-controller library.
+        Includes write throttling to reduce flash/EEPROM wear.
         
         Args:
             register: Register address to write to
             value: Value to write (16-bit unsigned)
             retries: Number of retry attempts for transient errors
+            force: If True, bypass throttle and write immediately
             
         Returns:
-            True if write was successful, False otherwise
+            True if write was successful (or skipped because value unchanged), False otherwise
         """
         import time
+        
+        # Write throttle: skip if same value was recently written
+        min_interval = deye_config.min_register_write_interval
+        if not force and register in self._write_cache:
+            cached_value, cached_time = self._write_cache[register]
+            if cached_value == value:
+                # Same value already written - skip entirely
+                return True
+            if time.time() - cached_time < min_interval:
+                # Different value but too soon - skip to reduce flash wear
+                print(f"  [WRITE] Throttled: register {register} write deferred ({int(time.time() - cached_time)}s < {min_interval}s interval)")
+                return True
         
         for attempt in range(retries):
             try:
@@ -278,6 +293,7 @@ class DeyeInverter:
                 # Use write_multiple_holding_registers (function code 16) instead of 
                 # write_holding_register (function code 6) - this is what deye-controller uses
                 self._modbus.write_multiple_holding_registers(register, [value])
+                self._write_cache[register] = (value, time.time())
                 print(f"  [WRITE] Success!")
                 return True
             except Exception as e:

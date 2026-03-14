@@ -547,9 +547,9 @@ class DeyeApp(ctk.CTk):
             self.after(0, lambda: self.sunset_panel.update_state("--:--", None, 0, False))
             return
         
-        # Throttle adjustments to at most once every 10 seconds
+        # Throttle adjustments to avoid excessive inverter writes
         current_time = time.time()
-        if current_time - self._last_sunset_adjustment < 10:
+        if current_time - self._last_sunset_adjustment < deye_config.min_register_write_interval:
             return
         
         settings = self.sunset_panel.get_settings()

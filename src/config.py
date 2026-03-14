@@ -49,6 +49,7 @@ class DeyeConfig:
     default_grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_GRID_CHARGE_AMPS", "40")))
     default_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_DISCHARGE_AMPS", "150")))
     zero_export_mode: int = field(default_factory=lambda: int(os.getenv("DEYE_ZERO_EXPORT_MODE", "2")))  # 1=Zero Export to Load (internal CT), 2=Zero Export to CT (external CT)
+    min_register_write_interval: int = field(default_factory=lambda: int(os.getenv("DEYE_MIN_REGISTER_WRITE_INTERVAL", "30")))  # Minimum seconds between writes to the same register (reduces flash wear)
 
 
 @dataclass
@@ -168,7 +169,7 @@ class OverpowerProtectionConfig:
     max_sell_power: int = field(default_factory=lambda: int(os.getenv("PROTECTION_MAX_SELL_POWER", "8000")))
     power_threshold_pct: int = field(default_factory=lambda: int(os.getenv("PROTECTION_POWER_THRESHOLD_PCT", "95")))
     recovery_threshold_pct: int = field(default_factory=lambda: int(os.getenv("PROTECTION_RECOVERY_THRESHOLD_PCT", "85")))
-    adjustment_interval: int = field(default_factory=lambda: int(os.getenv("PROTECTION_ADJUSTMENT_INTERVAL", "10")))
+    adjustment_interval: int = field(default_factory=lambda: int(os.getenv("PROTECTION_ADJUSTMENT_INTERVAL", "30")))
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("PROTECTION_ENABLED_AT_STARTUP", "false").lower() == "true")
 
 
