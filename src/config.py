@@ -48,6 +48,7 @@ class DeyeConfig:
     default_max_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_CHARGE_AMPS", "60")))
     default_grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_GRID_CHARGE_AMPS", "40")))
     default_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_DISCHARGE_AMPS", "150")))
+    zero_export_mode: int = field(default_factory=lambda: int(os.getenv("DEYE_ZERO_EXPORT_MODE", "2")))  # 1=Zero Export to Load (internal CT), 2=Zero Export to CT (external CT)
 
 
 @dataclass

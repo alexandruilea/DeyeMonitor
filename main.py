@@ -8,7 +8,7 @@ import time
 import threading
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config, get_app_path
+from src.config import ems_defaults, deye_config, protection_config, get_app_path
 from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
@@ -348,13 +348,19 @@ class DeyeApp(ctk.CTk):
                         if success3:
                             self._current_max_discharge = defaults["max_discharge_amps"]
                     
-                    # Restore Zero Export to CT mode when schedule is disabled
-                    if self._current_work_mode != 1:
-                        if self.inverter.set_work_mode(1):
-                            self._current_work_mode = 1
+                    # Restore Zero Export mode when schedule is disabled
+                    if self._current_work_mode != deye_config.zero_export_mode:
+                        if self.inverter.set_work_mode(deye_config.zero_export_mode):
+                            self._current_work_mode = deye_config.zero_export_mode
                     
                     # Restore boost protection if it was disabled by sell mode
                     if self._protection_disabled_by_sell:
+                        # Restore max sell power to config value before re-enabling protection
+                        config_sell_power = protection_config.max_sell_power
+                        if self._current_sell_power != config_sell_power:
+                            if self.inverter.set_max_sell_power(config_sell_power):
+                                self._current_sell_power = config_sell_power
+                                self.after(0, lambda p=config_sell_power: self.protection_panel.set_max_sell_power(p))
                         self._protection_disabled_by_sell = False
                         self.after(0, lambda: self.protection_panel.set_enabled(True))
                         print("[SCHEDULE] Boost protection restored (schedule disabled)")
@@ -409,8 +415,8 @@ class DeyeApp(ctk.CTk):
         if self._last_applied_schedule == schedule_key:
             return
         
-        # Determine work mode: 0 = Selling First, 1 = Zero Export to CT
-        target_work_mode = 0 if target_sell else 1
+        # Determine work mode: 0 = Selling First, 1/2 = Zero Export (from config)
+        target_work_mode = 0 if target_sell else deye_config.zero_export_mode
         
         # Apply the settings - only write values that actually changed
         sell_str = f", Sell={target_sell_power}W" if target_sell else ""
@@ -446,7 +452,7 @@ class DeyeApp(ctk.CTk):
         if self._current_work_mode != target_work_mode:
             if self.inverter.set_work_mode(target_work_mode):
                 self._current_work_mode = target_work_mode
-                print(f"[SCHEDULE] Work mode set to {'Selling First' if target_work_mode == 0 else 'Zero Export (CT)'}")
+                print(f"[SCHEDULE] Work mode set to {'Selling First' if target_work_mode == 0 else 'Zero Export (' + ('Load' if target_work_mode == 1 else 'CT') + ')'}")
             else:
                 all_success = False
         
@@ -457,6 +463,13 @@ class DeyeApp(ctk.CTk):
                 self.after(0, lambda: self.protection_panel.set_enabled(False))
                 print("[SCHEDULE] Boost protection paused (sell mode active)")
         elif not target_sell and self._protection_disabled_by_sell:
+            # Restore max sell power to config value before re-enabling protection
+            config_sell_power = protection_config.max_sell_power
+            if self._current_sell_power != config_sell_power:
+                if self.inverter.set_max_sell_power(config_sell_power):
+                    self._current_sell_power = config_sell_power
+                    self.after(0, lambda p=config_sell_power: self.protection_panel.set_max_sell_power(p))
+                    print(f"[SCHEDULE] Max sell power restored to {config_sell_power}W")
             self._protection_disabled_by_sell = False
             self.after(0, lambda: self.protection_panel.set_enabled(True))
             print("[SCHEDULE] Boost protection restored (sell mode ended)")
