@@ -5,7 +5,7 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable
 
-from src.config import protection_config, deye_config, sunset_config
+from src.config import protection_config, deye_config, sunset_config, default_schedules
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -783,25 +783,7 @@ class TimeSchedulePanel(ctk.CTkFrame):
         )
         self.lbl_info.grid(row=2, column=0, pady=(5, 10))
         
-        # Add default schedule rows
-        default_schedules = [
-            {"start_hour": 23, "start_min": 0, "end_hour": 6, "end_min": 0,
-             "max_charge_amps": 40, "grid_charge_amps": 40,
-             "max_discharge_amps": deye_config.max_discharge_amps_limit,
-             "sell": True, "sell_power": 500},
-            {"start_hour": 6, "start_min": 0, "end_hour": 9, "end_min": 0,
-             "max_charge_amps": 40, "grid_charge_amps": 40,
-             "max_discharge_amps": deye_config.max_discharge_amps_limit,
-             "sell": True, "sell_power": 1000},
-            {"start_hour": 9, "start_min": 0, "end_hour": 18, "end_min": 0,
-             "max_charge_amps": 40, "grid_charge_amps": 40,
-             "max_discharge_amps": deye_config.max_discharge_amps_limit,
-             "sell": False, "sell_power": protection_config.max_sell_power},
-            {"start_hour": 18, "start_min": 0, "end_hour": 23, "end_min": 0,
-             "max_charge_amps": 40, "grid_charge_amps": 40,
-             "max_discharge_amps": deye_config.max_discharge_amps_limit,
-             "sell": True, "sell_power": 1000},
-        ]
+        # Add default schedule rows from .env (SCHEDULE_N variables)
         for sched in default_schedules:
             self._add_row()
             self.schedule_rows[-1].set_schedule(sched)

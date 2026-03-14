@@ -186,9 +186,43 @@ class SunsetChargingConfig:
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("SUNSET_CHARGING_ENABLED", "true").lower() == "true")
 
 
+def load_default_schedules() -> list:
+    """Load default schedule rows from environment variables.
+    
+    Format: SCHEDULE_N=HH:MM-HH:MM,max_charge,grid_charge,max_discharge,sell|nosell,sell_power
+    Example: SCHEDULE_1=23:00-06:00,40,40,185,sell,500
+    """
+    schedules = []
+    i = 1
+    while True:
+        raw = os.getenv(f"SCHEDULE_{i}")
+        if not raw:
+            break
+        try:
+            parts = raw.split(",")
+            time_range, max_charge, grid_charge, max_discharge, sell_mode, sell_power = parts
+            start_str, end_str = time_range.split("-")
+            sh, sm = start_str.split(":")
+            eh, em = end_str.split(":")
+            schedules.append({
+                "start_hour": int(sh), "start_min": int(sm),
+                "end_hour": int(eh), "end_min": int(em),
+                "max_charge_amps": int(max_charge),
+                "grid_charge_amps": int(grid_charge),
+                "max_discharge_amps": int(max_discharge),
+                "sell": sell_mode.strip().lower() == "sell",
+                "sell_power": int(sell_power),
+            })
+        except (ValueError, IndexError):
+            print(f"[CONFIG] Warning: Could not parse SCHEDULE_{i}={raw}")
+        i += 1
+    return schedules
+
+
 # Global config instances
 deye_config = DeyeConfig()
 outlet_configs = load_outlet_configs()
 ems_defaults = EMSDefaults()
 protection_config = OverpowerProtectionConfig()
 sunset_config = SunsetChargingConfig()
+default_schedules = load_default_schedules()
