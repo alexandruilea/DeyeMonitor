@@ -171,6 +171,7 @@ class OverpowerProtectionConfig:
     recovery_threshold_pct: int = field(default_factory=lambda: int(os.getenv("PROTECTION_RECOVERY_THRESHOLD_PCT", "85")))
     adjustment_interval: int = field(default_factory=lambda: int(os.getenv("PROTECTION_ADJUSTMENT_INTERVAL", "30")))
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("PROTECTION_ENABLED_AT_STARTUP", "false").lower() == "true")
+    battery_nominal_voltage: int = field(default_factory=lambda: int(os.getenv("PROTECTION_BATTERY_NOMINAL_VOLTAGE", "52")))  # Nominal battery voltage for proportional amp calculation
 
 
 @dataclass

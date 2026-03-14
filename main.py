@@ -684,17 +684,12 @@ class DeyeApp(ctk.CTk):
 
     def _process_overpower_protection(self, data) -> None:
         """
-        Process overpower protection logic.
+        Process overpower protection logic with proportional response.
         
-        Increases charging to absorb excess power when:
-        - Export power exceeds threshold percentage of max sell power
-        - Any phase voltage exceeds warning threshold
-        
-        Decreases charging (removes boost) when:
-        - Export power drops below recovery threshold
-        - All phase voltages are below recovery threshold
-        
-        Respects adjustment_interval to allow system to stabilize between changes.
+        Uses proportional amp calculation based on how far export power is from
+        the target (midpoint between warning and recovery thresholds).
+        For large deviations, jumps proportionally; for small ones, uses charge_step
+        for fine-tuning to find the hysteresis point.
         """
         if not self.protection_panel.is_enabled():
             self.after(0, lambda: self.protection_panel.update_protection_state(False, 0))
@@ -728,6 +723,10 @@ class DeyeApp(ctk.CTk):
         voltage_warning = settings["voltage_warning"]
         voltage_recovery = settings["voltage_recovery"]
         charge_step = settings["charge_step"]
+        battery_voltage = protection_config.battery_nominal_voltage
+        
+        # Target power: midpoint between warning and recovery (stable equilibrium)
+        target_power = (power_warning_threshold + power_recovery_threshold) / 2
         
         # Determine if we need to boost or reduce
         needs_boost = (export_power >= power_warning_threshold) or (max_voltage >= voltage_warning)
@@ -737,21 +736,28 @@ class DeyeApp(ctk.CTk):
         max_charge_limit = deye_config.max_charge_amps_limit
         
         if needs_boost:
-            # Increase boost by one step
-            new_boost = min(self._protection_boost_amps + charge_step, max_charge_limit - base_charge)
+            # Calculate proportional step: how many amps to absorb excess above target
+            excess_power = export_power - target_power
+            proportional_step = int(excess_power / battery_voltage) if battery_voltage > 0 else charge_step
+            # Round to nearest charge_step multiple, minimum one step
+            proportional_step = ((proportional_step + charge_step // 2) // charge_step) * charge_step
+            step = max(charge_step, proportional_step)
+            
+            new_boost = min(self._protection_boost_amps + step, max_charge_limit - base_charge)
             if new_boost != self._protection_boost_amps:
                 self._protection_boost_amps = new_boost
                 self._protection_active = True
                 self._last_protection_adjustment = current_time
                 target_charge = base_charge + self._protection_boost_amps
                 
-                print(f"[PROTECTION] BOOST: Base={base_charge}A + Boost={self._protection_boost_amps}A = {target_charge}A "
+                step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
+                print(f"[PROTECTION] BOOST ({step_type} +{step}A): Base={base_charge}A + Boost={self._protection_boost_amps}A = {target_charge}A "
                       f"(Export={export_power}W/{max_sell}W, MaxV={max_voltage:.1f}V)")
                 
                 if self.inverter.set_max_charge_current(target_charge):
                     self._current_max_charge = target_charge
                     self._update_charge_display()
-                    self._log_error(f"Protection: Boosting to {target_charge}A (export={export_power}W, voltage={max_voltage:.1f}V)")
+                    self._log_error(f"Protection: Boosting +{step}A ({step_type}) to {target_charge}A (export={export_power}W, voltage={max_voltage:.1f}V)")
                     
         elif can_recover and self._protection_boost_amps > 0:
             # If sunset charging is active and driving a higher rate anyway,
@@ -764,26 +770,33 @@ class DeyeApp(ctk.CTk):
                     self._protection_active = False
                     self._last_protection_adjustment = current_time
             else:
-                # Normal recovery - reduce boost by one step
-                new_boost = max(0, self._protection_boost_amps - charge_step)
+                # Calculate proportional step: how many amps of headroom we have below target
+                margin_power = target_power - export_power
+                proportional_step = int(margin_power / battery_voltage) if battery_voltage > 0 else charge_step
+                # Round to nearest charge_step multiple, minimum one step
+                proportional_step = ((proportional_step + charge_step // 2) // charge_step) * charge_step
+                step = max(charge_step, proportional_step)
+                
+                new_boost = max(0, self._protection_boost_amps - step)
                 if new_boost != self._protection_boost_amps:
                     self._protection_boost_amps = new_boost
                     self._last_protection_adjustment = current_time
                     target_charge = base_charge + self._protection_boost_amps
                     
+                    step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
                     if self._protection_boost_amps == 0:
                         self._protection_active = False
-                        print(f"[PROTECTION] RECOVERED: Back to base {target_charge}A")
+                        print(f"[PROTECTION] RECOVERED ({step_type} -{step}A): Back to base {target_charge}A")
                     else:
-                        print(f"[PROTECTION] Reducing boost to +{self._protection_boost_amps}A = {target_charge}A")
+                        print(f"[PROTECTION] Reducing ({step_type} -{step}A) boost to +{self._protection_boost_amps}A = {target_charge}A")
                     
                     if self.inverter.set_max_charge_current(target_charge):
                         self._current_max_charge = target_charge
                         self._update_charge_display()
                         if self._protection_boost_amps == 0:
-                            self._log_error(f"Protection: Recovered, back to {target_charge}A")
+                            self._log_error(f"Protection: Recovered (-{step}A {step_type}), back to {target_charge}A")
                         else:
-                            self._log_error(f"Protection: Reduced to {target_charge}A")
+                            self._log_error(f"Protection: Reduced -{step}A ({step_type}) to {target_charge}A")
         
         # Update protection state display
         self.after(0, lambda: self.protection_panel.update_protection_state(
