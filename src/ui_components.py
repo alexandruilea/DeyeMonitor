@@ -574,10 +574,31 @@ class TimeScheduleRow(ctk.CTkFrame):
         self.max_discharge.insert(0, str(DEFAULT_MAX_DISCHARGE_AMPS))
         self.max_discharge.bind("<Key>", lambda e: self._mark_dirty())
         self.max_discharge.bind("<FocusOut>", lambda e: self._on_field_change())
-        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=17, padx=(0, 25))
+        ctk.CTkLabel(self, text="A", font=("Roboto", 10)).grid(row=0, column=17, padx=(0, 10))
+        
+        # Battery SELL switch
+        self.sell_var = ctk.BooleanVar(value=False)
+        self.sw_sell = ctk.CTkSwitch(
+            self, text="Battery SELL",
+            variable=self.sell_var,
+            font=("Roboto", 10, "bold"),
+            text_color="#E74C3C",
+            width=40,
+            command=lambda: (self._mark_dirty(), self._on_field_change())
+        )
+        self.sw_sell.grid(row=0, column=18, padx=(15, 5))
+        
+        # Max Sell Power (W)
+        ctk.CTkLabel(self, text="Sell Power:", font=("Roboto", 10), text_color="#E74C3C").grid(row=0, column=19, padx=(5, 2))
+        self.sell_power = ctk.CTkEntry(self, width=70, justify="center")
+        self.sell_power.grid(row=0, column=20, padx=2)
+        self.sell_power.insert(0, "0")
+        self.sell_power.bind("<Key>", lambda e: self._mark_dirty())
+        self.sell_power.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="W", font=("Roboto", 10)).grid(row=0, column=21, padx=(0, 5))
         
         # Add a spacer column to push delete button to the right
-        self.grid_columnconfigure(18, weight=1)
+        self.grid_columnconfigure(22, weight=1)
         
         # Delete button
         self.btn_delete = ctk.CTkButton(
@@ -585,7 +606,7 @@ class TimeScheduleRow(ctk.CTkFrame):
             fg_color="#E74C3C", hover_color="#C0392B",
             command=lambda: self.on_delete(self.index)
         )
-        self.btn_delete.grid(row=0, column=19, padx=(5, 10))
+        self.btn_delete.grid(row=0, column=23, padx=(5, 10))
     
     def _mark_dirty(self) -> None:
         """Mark this row as having been edited."""
@@ -609,6 +630,8 @@ class TimeScheduleRow(ctk.CTkFrame):
                 "max_charge_amps": int(self.max_charge.get()),
                 "grid_charge_amps": int(self.grid_charge.get()),
                 "max_discharge_amps": int(self.max_discharge.get()),
+                "sell": self.sell_var.get(),
+                "sell_power": int(self.sell_power.get()),
             }
         except ValueError:
             return None
@@ -637,6 +660,11 @@ class TimeScheduleRow(ctk.CTkFrame):
         
         self.max_discharge.delete(0, "end")
         self.max_discharge.insert(0, str(data.get("max_discharge_amps", DEFAULT_MAX_DISCHARGE_AMPS)))
+        
+        self.sell_var.set(data.get("sell", False))
+        
+        self.sell_power.delete(0, "end")
+        self.sell_power.insert(0, str(data.get("sell_power", 0)))
 
 
 class TimeSchedulePanel(ctk.CTkFrame):
@@ -655,13 +683,13 @@ class TimeSchedulePanel(ctk.CTkFrame):
         header_frame.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(
-            header_frame, text="⏰ CHARGE SCHEDULE",
+            header_frame, text="⏰ CHARGE / SELL SCHEDULE",
             font=("Roboto", 14, "bold"),
             text_color="#F39C12"
         ).grid(row=0, column=0, sticky="w")
         
         # Enable/Disable switch
-        self.enabled_var = ctk.BooleanVar(value=False)
+        self.enabled_var = ctk.BooleanVar(value=True)
         self.enable_switch = ctk.CTkSwitch(
             header_frame, text="Enable Schedule",
             variable=self.enabled_var,
@@ -672,9 +700,9 @@ class TimeSchedulePanel(ctk.CTkFrame):
         
         # Status label
         self.lbl_status = ctk.CTkLabel(
-            header_frame, text="Disabled",
+            header_frame, text="Active",
             font=("Roboto", 11),
-            text_color="gray"
+            text_color="#2ECC71"
         )
         self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
         
@@ -755,8 +783,28 @@ class TimeSchedulePanel(ctk.CTkFrame):
         )
         self.lbl_info.grid(row=2, column=0, pady=(5, 10))
         
-        # Add a default row (00:00 to 23:59)
-        self._add_row()
+        # Add default schedule rows
+        default_schedules = [
+            {"start_hour": 23, "start_min": 0, "end_hour": 6, "end_min": 0,
+             "max_charge_amps": 40, "grid_charge_amps": 40,
+             "max_discharge_amps": deye_config.max_discharge_amps_limit,
+             "sell": True, "sell_power": 500},
+            {"start_hour": 6, "start_min": 0, "end_hour": 9, "end_min": 0,
+             "max_charge_amps": 40, "grid_charge_amps": 40,
+             "max_discharge_amps": deye_config.max_discharge_amps_limit,
+             "sell": True, "sell_power": 1000},
+            {"start_hour": 9, "start_min": 0, "end_hour": 18, "end_min": 0,
+             "max_charge_amps": 40, "grid_charge_amps": 40,
+             "max_discharge_amps": deye_config.max_discharge_amps_limit,
+             "sell": False, "sell_power": protection_config.max_sell_power},
+            {"start_hour": 18, "start_min": 0, "end_hour": 23, "end_min": 0,
+             "max_charge_amps": 40, "grid_charge_amps": 40,
+             "max_discharge_amps": deye_config.max_discharge_amps_limit,
+             "sell": True, "sell_power": 1000},
+        ]
+        for sched in default_schedules:
+            self._add_row()
+            self.schedule_rows[-1].set_schedule(sched)
     
     def _on_enable_toggle(self) -> None:
         """Handle enable/disable toggle."""
@@ -852,9 +900,11 @@ class TimeSchedulePanel(ctk.CTkFrame):
                 "max_charge_amps": int(self.default_max_charge.get()),
                 "grid_charge_amps": int(self.default_grid_charge.get()),
                 "max_discharge_amps": int(self.default_max_discharge.get()),
+                "sell": False,
+                "sell_power": 0,
             }
         except ValueError:
-            return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150}
+            return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150, "sell": False, "sell_power": 0}
     
     def update_status(self, active_schedule: dict = None) -> None:
         """Update the status label to show current state."""
@@ -863,8 +913,9 @@ class TimeSchedulePanel(ctk.CTkFrame):
         elif active_schedule:
             start = f"{active_schedule['start_hour']:02d}:{active_schedule['start_min']:02d}"
             end = f"{active_schedule['end_hour']:02d}:{active_schedule['end_min']:02d}"
+            sell_info = f" Sell:{active_schedule['sell_power']}W" if active_schedule.get('sell') else ""
             self.lbl_status.configure(
-                text=f"Active: {start}-{end} | Max:{active_schedule['max_charge_amps']}A Grid:{active_schedule['grid_charge_amps']}A Discharge:{active_schedule['max_discharge_amps']}A",
+                text=f"Active: {start}-{end} | Max:{active_schedule['max_charge_amps']}A Grid:{active_schedule['grid_charge_amps']}A Discharge:{active_schedule['max_discharge_amps']}A{sell_info}",
                 text_color="#2ECC71"
             )
         else:
@@ -1064,7 +1115,20 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
     def is_enabled(self) -> bool:
         """Check if protection is enabled."""
         return self.enabled_var.get()
-    
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Programmatically enable or disable the protection."""
+        self.enabled_var.set(enabled)
+        if enabled:
+            self.enable_switch.select()
+            self.lbl_status.configure(text="Active", text_color="#2ECC71")
+        else:
+            self.enable_switch.deselect()
+            self.lbl_status.configure(text="Disabled (Selling)", text_color="#F39C12")
+            self.lbl_protection_state.configure(text="Protection: Paused by sell mode", text_color="#F39C12")
+        if self.on_settings_change:
+            self.on_settings_change()
+
     def set_max_sell_power(self, power: int) -> None:
         """Set the max sell power value (e.g., from inverter reading)."""
         self.max_sell_power.delete(0, "end")

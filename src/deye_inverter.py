@@ -349,3 +349,29 @@ class DeyeInverter:
         """
         amps = max(0, min(deye_config.max_discharge_amps_limit, amps))
         return self._write_register(deye_config.reg_max_discharge_amps, amps)
+
+    def set_work_mode(self, mode: int) -> bool:
+        """
+        Set the inverter work mode (register 142).
+        
+        Args:
+            mode: 0 = Selling First, 1 = Zero Export (built-in CT), 2 = Zero Export (external CT)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        mode = max(0, min(2, mode))
+        return self._write_register(142, mode)
+
+    def set_max_sell_power(self, watts: int) -> bool:
+        """
+        Set the maximum grid sell power (register 143).
+        
+        Args:
+            watts: Maximum sell power in watts
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        watts = max(0, watts)
+        return self._write_register(deye_config.reg_max_solar_sell_power, watts)

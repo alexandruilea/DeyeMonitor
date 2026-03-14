@@ -192,6 +192,9 @@ class DeyeApp(ctk.CTk):
         self._current_max_charge = None
         self._current_grid_charge = None
         self._current_max_discharge = None
+        self._current_work_mode = None
+        self._current_sell_power = None
+        self._protection_disabled_by_sell = False  # Track if protection was auto-disabled by sell mode
         
         # Global Settings panel
         self.settings = SettingsPanel(
@@ -206,7 +209,7 @@ class DeyeApp(ctk.CTk):
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 10
+        current_row = 11
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -270,6 +273,16 @@ class DeyeApp(ctk.CTk):
         if max_sell is not None:
             print(f"[INIT] Max sell power from inverter: {max_sell}W")
             self.after(0, lambda: self.protection_panel.set_max_sell_power(max_sell))
+        
+        # If any default schedule has selling enabled, disable boost protection at startup
+        # to prevent it from fighting the intentional battery export
+        any_sell = any(
+            s.get("sell", False) for s in self.schedule_panel.get_all_schedules() if s
+        )
+        if any_sell and self.protection_panel.is_enabled():
+            self._protection_disabled_by_sell = True
+            self.after(0, lambda: self.protection_panel.set_enabled(False))
+            print("[INIT] Boost protection disabled at startup (sell mode detected in schedule)")
     
     def _log_error(self, message: str) -> None:
         """Log error message to UI (called from background thread)."""
@@ -335,6 +348,17 @@ class DeyeApp(ctk.CTk):
                         if success3:
                             self._current_max_discharge = defaults["max_discharge_amps"]
                     
+                    # Restore Zero Export to CT mode when schedule is disabled
+                    if self._current_work_mode != 1:
+                        if self.inverter.set_work_mode(1):
+                            self._current_work_mode = 1
+                    
+                    # Restore boost protection if it was disabled by sell mode
+                    if self._protection_disabled_by_sell:
+                        self._protection_disabled_by_sell = False
+                        self.after(0, lambda: self.protection_panel.set_enabled(True))
+                        print("[SCHEDULE] Boost protection restored (schedule disabled)")
+                    
                     if success1 and success2 and success3:
                         self.after(0, self._update_charge_display)
                     self._log_error(f"Schedule disabled - defaults applied: Max={defaults['max_charge_amps']}A, Grid={defaults['grid_charge_amps']}A, Discharge={defaults['max_discharge_amps']}A")
@@ -342,7 +366,7 @@ class DeyeApp(ctk.CTk):
             threading.Thread(target=apply_defaults, daemon=True).start()
 
     def _process_schedule(self) -> None:
-        """Process time-based charge schedule and apply settings if needed."""
+        """Process time-based charge/sell schedule and apply settings if needed."""
         if not self.schedule_panel.is_enabled():
             # Schedule is disabled, nothing to do
             self.after(0, lambda: self.schedule_panel.update_status(None))
@@ -358,6 +382,8 @@ class DeyeApp(ctk.CTk):
             target_max = active_schedule["max_charge_amps"]
             target_grid = active_schedule["grid_charge_amps"]
             target_discharge = active_schedule["max_discharge_amps"]
+            target_sell = active_schedule.get("sell", False)
+            target_sell_power = active_schedule.get("sell_power", 0)
             schedule_key = (
                 active_schedule["start_hour"],
                 active_schedule["start_min"],
@@ -366,6 +392,8 @@ class DeyeApp(ctk.CTk):
                 target_max,
                 target_grid,
                 target_discharge,
+                target_sell,
+                target_sell_power,
             )
         else:
             # No active time slot - use defaults
@@ -373,47 +401,83 @@ class DeyeApp(ctk.CTk):
             target_max = defaults["max_charge_amps"]
             target_grid = defaults["grid_charge_amps"]
             target_discharge = defaults["max_discharge_amps"]
-            schedule_key = ("default", target_max, target_grid, target_discharge)
+            target_sell = defaults.get("sell", False)
+            target_sell_power = defaults.get("sell_power", 0)
+            schedule_key = ("default", target_max, target_grid, target_discharge, target_sell, target_sell_power)
         
         # Only apply if settings changed
         if self._last_applied_schedule == schedule_key:
             return
         
-        # Apply the settings - only write values that actually changed
-        if active_schedule:
-            print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
-        else:
-            print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
+        # Determine work mode: 0 = Selling First, 1 = Zero Export to CT
+        target_work_mode = 0 if target_sell else 1
         
-        success1 = True
-        success2 = True
-        success3 = True
+        # Apply the settings - only write values that actually changed
+        sell_str = f", Sell={target_sell_power}W" if target_sell else ""
+        if active_schedule:
+            print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
+        else:
+            print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
+        
+        all_success = True
         
         # Only write max charge if it changed
         if self._current_max_charge != target_max:
-            success1 = self.inverter.set_max_charge_current(target_max)
-            if success1:
+            if self.inverter.set_max_charge_current(target_max):
                 self._current_max_charge = target_max
+            else:
+                all_success = False
         
         # Only write grid charge if it changed
         if self._current_grid_charge != target_grid:
-            success2 = self.inverter.set_grid_charge_current(target_grid)
-            if success2:
+            if self.inverter.set_grid_charge_current(target_grid):
                 self._current_grid_charge = target_grid
+            else:
+                all_success = False
         
         # Only write max discharge if it changed
         if self._current_max_discharge != target_discharge:
-            success3 = self.inverter.set_max_discharge_current(target_discharge)
-            if success3:
+            if self.inverter.set_max_discharge_current(target_discharge):
                 self._current_max_discharge = target_discharge
+            else:
+                all_success = False
         
-        if success1 and success2 and success3:
+        # Set work mode (Selling First or Zero Export)
+        if self._current_work_mode != target_work_mode:
+            if self.inverter.set_work_mode(target_work_mode):
+                self._current_work_mode = target_work_mode
+                print(f"[SCHEDULE] Work mode set to {'Selling First' if target_work_mode == 0 else 'Zero Export (CT)'}")
+            else:
+                all_success = False
+        
+        # Interlock: disable boost protection when selling, restore when not
+        if target_sell and not self._protection_disabled_by_sell:
+            if self.protection_panel.is_enabled():
+                self._protection_disabled_by_sell = True
+                self.after(0, lambda: self.protection_panel.set_enabled(False))
+                print("[SCHEDULE] Boost protection paused (sell mode active)")
+        elif not target_sell and self._protection_disabled_by_sell:
+            self._protection_disabled_by_sell = False
+            self.after(0, lambda: self.protection_panel.set_enabled(True))
+            print("[SCHEDULE] Boost protection restored (sell mode ended)")
+        
+        # Set max sell power when in selling mode
+        if target_sell and self._current_sell_power != target_sell_power:
+            if self.inverter.set_max_sell_power(target_sell_power):
+                self._current_sell_power = target_sell_power
+                # Also update the boost protection panel to match
+                self.after(0, lambda p=target_sell_power: self.protection_panel.set_max_sell_power(p))
+                print(f"[SCHEDULE] Max sell power set to {target_sell_power}W")
+            else:
+                all_success = False
+        
+        if all_success:
             self._last_applied_schedule = schedule_key
             self._update_charge_display()
             if active_schedule:
-                self._log_error(f"Schedule applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
+                self._log_error(f"Schedule applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
             else:
-                self._log_error(f"Defaults applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A")
+                self._log_error(f"Defaults applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
         else:
             self._log_error(f"Failed to apply charge settings")
 
@@ -445,6 +509,8 @@ class DeyeApp(ctk.CTk):
                 self._sunset_active = False
                 self._last_applied_schedule = None
                 print("[SUNSET] Disabled - clearing boost")
+
+
 
     def _process_sunset_charging(self, data) -> None:
         """
