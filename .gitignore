@@ -46,3 +46,4 @@ Thumbs.db
 /.vs
 DeyeMonitor.zip
 dist_linux/
+logs/
