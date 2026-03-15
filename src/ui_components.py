@@ -147,6 +147,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
         self.export_switch.grid(row=4, column=0, sticky="w", padx=10, pady=8)
         
         self._add_setting_h("Min Export:", variables["export_limit"], 4, 1)
+        self._add_setting_h("Delay (s):", variables["export_delay"], 4, 3)
         
         # Row 5: Voltage section with toggle and phase selector
         self.voltage_switch = ctk.CTkSwitch(

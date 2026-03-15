@@ -36,6 +36,7 @@ class LogicResult(Enum):
     BLOCKED_BATTERY_LOW = "Blocked: Battery SOC Too Low"
     WAIT_SOC_RECOVERY = "Wait: SOC Recovery"
     WAIT_RESTART_DELAY = "Wait: Restart Delay"
+    WAIT_EXPORT_DELAY = "Wait: Export Delay"
     TAPO_OFFLINE = "HP: TAPO OFFLINE"
 
 
@@ -58,6 +59,7 @@ class LogicState:
     soc_shutdown: dict[int, bool] = None  # outlet_id -> was_shut_down_by_low_soc
     last_seen_on: dict[int, bool] = None  # outlet_id -> was ON last cycle
     restart_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when OFF was detected
+    export_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when export first exceeded limit
     
     def __post_init__(self):
         if self.lv_timers is None:
@@ -74,6 +76,8 @@ class LogicState:
             self.last_seen_on = {}
         if self.restart_delay_start is None:
             self.restart_delay_start = {}
+        if self.export_delay_start is None:
+            self.export_delay_start = {}
     
     def reset_lv_timer(self, outlet_id: int) -> None:
         """Reset the low-voltage timer for an outlet."""
@@ -171,6 +175,32 @@ class LogicState:
         if start is None:
             return 0.0
         remaining = (delay_minutes * 60) - (time.time() - start)
+        return max(0.0, remaining)
+    
+    def start_export_delay(self, outlet_id: int) -> None:
+        """Start the export delay timer for an outlet if not already started."""
+        if outlet_id not in self.export_delay_start or self.export_delay_start[outlet_id] is None:
+            self.export_delay_start[outlet_id] = time.time()
+            print(f"[EMS] Export delay started for outlet {outlet_id}")
+    
+    def reset_export_delay(self, outlet_id: int) -> None:
+        """Reset the export delay timer (export dropped below limit)."""
+        if self.export_delay_start.get(outlet_id) is not None:
+            self.export_delay_start[outlet_id] = None
+    
+    def export_delay_elapsed(self, outlet_id: int, delay: int) -> bool:
+        """Check if export delay timer has exceeded the configured delay."""
+        start = self.export_delay_start.get(outlet_id)
+        if start is None:
+            return False
+        return (time.time() - start) >= delay
+    
+    def get_export_delay_remaining(self, outlet_id: int, delay: int) -> float:
+        """Get remaining export delay in seconds."""
+        start = self.export_delay_start.get(outlet_id)
+        if start is None:
+            return 0.0
+        remaining = delay - (time.time() - start)
         return max(0.0, remaining)
     
     def clear_restart_delay(self, outlet_id: int) -> None:
@@ -440,10 +470,22 @@ class EMSLogic:
             # Trigger 2: Export dump (too much power being exported) - if export trigger enabled
             if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
                 if soc_too_low:
+                    self.state.reset_export_delay(outlet.config.outlet_id)
                     return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: Export {export_watts}W but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
+                # Export delay: wait for sustained export before triggering
+                if outlet.config.export_delay > 0:
+                    self.state.start_export_delay(outlet.config.outlet_id)
+                    if not self.state.export_delay_elapsed(outlet.config.outlet_id, outlet.config.export_delay):
+                        remaining = self.state.get_export_delay_remaining(outlet.config.outlet_id, outlet.config.export_delay)
+                        mins, secs = divmod(int(remaining), 60)
+                        return LogicResult.WAIT_EXPORT_DELAY, f"{outlet.config.name}: Export {export_watts}W ({mins}m{secs:02d}s)"
                 print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_EXPORT_DUMP | Export={export_watts}W limit={outlet.config.export_limit}W SOC={data.soc}% Grid={data.grid_power}W")
+                self.state.reset_export_delay(outlet.config.outlet_id)
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_EXPORT_DUMP, f"{outlet.config.name}: {export_watts}W"
+            else:
+                # Export dropped below limit — reset timer
+                self.state.reset_export_delay(outlet.config.outlet_id)
             
             # Trigger 3: SOC-based auto start (battery charged enough) - if SOC trigger enabled
             if outlet.config.soc_enabled and data.soc >= outlet.config.start_soc:
@@ -489,6 +531,7 @@ class EMSLogic:
             LogicResult.BLOCKED_BATTERY_LOW: "#E67E22",
             LogicResult.WAIT_SOC_RECOVERY: "#E67E22",
             LogicResult.WAIT_RESTART_DELAY: "orange",
+            LogicResult.WAIT_EXPORT_DELAY: "gold",
             LogicResult.TAPO_OFFLINE: "gray",
         }
         return colors.get(result, "white")

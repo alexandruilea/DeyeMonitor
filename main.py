@@ -107,6 +107,7 @@ class DeyeApp(ctk.CTk):
                 "voltage_enabled": ctk.BooleanVar(value=outlet.config.voltage_enabled),
                 "export_enabled": ctk.BooleanVar(value=outlet.config.export_enabled),
                 "export_limit": ctk.StringVar(value=str(outlet.config.export_limit)),
+                "export_delay": ctk.StringVar(value=str(outlet.config.export_delay)),
                 "off_grid_mode": ctk.BooleanVar(value=outlet.config.off_grid_mode),
                 "on_grid_always_on": ctk.BooleanVar(value=outlet.config.on_grid_always_on),
                 "restart_delay_enabled": ctk.BooleanVar(value=outlet.config.restart_delay_enabled),
@@ -1007,6 +1008,7 @@ class DeyeApp(ctk.CTk):
                 outlet.config.voltage_enabled = cfg_vars["voltage_enabled"].get()
                 outlet.config.export_enabled = cfg_vars["export_enabled"].get()
                 outlet.config.export_limit = int(self._get_safe_value(cfg_vars["export_limit"], outlet.config.export_limit))
+                outlet.config.export_delay = int(self._get_safe_value(cfg_vars["export_delay"], outlet.config.export_delay))
                 outlet.config.off_grid_mode = cfg_vars["off_grid_mode"].get()
                 outlet.config.on_grid_always_on = cfg_vars["on_grid_always_on"].get()
                 outlet.config.restart_delay_enabled = cfg_vars["restart_delay_enabled"].get()
