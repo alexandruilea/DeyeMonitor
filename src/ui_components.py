@@ -112,6 +112,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
         self._add_setting_v("Start SOC %", variables["start_soc"], 1, 2)
         self._add_setting_v("Stop SOC %", variables["stop_soc"], 1, 3)
         self._add_setting_v("Power W", variables["power"], 1, 4)
+        self._add_setting_v("SOC Delay (s)", variables["soc_delay"], 1, 5)
         
         # Row 3: Headroom section (applies to all triggers)
         ctk.CTkLabel(
@@ -173,7 +174,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
         
         # Row 6: Voltage OFF parameters
         self._add_setting_h("Low V (OFF):", variables["lv_threshold"], 6, 1)
-        self._add_setting_h("LV Delay (s):", variables["lv_delay"], 6, 3)
+        self._add_setting_h("HV/LV Delay (s):", variables["lv_delay"], 6, 3)
         
         # Row 7: Low Voltage Recovery parameters (with slight extra spacing)
         self._add_setting_h("LV Recovery V:", variables["lv_recovery_voltage"], 7, 1, pady=(12, 10))

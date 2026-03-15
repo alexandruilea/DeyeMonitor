@@ -138,7 +138,7 @@ class DeyeInverter:
             except Exception:
                 bms_charge_current_limit = 0
             
-            return InverterData(
+            result = InverterData(
                 soc=raw[0],  # R0: Battery capacity
                 battery_power=self._parse_signed(raw[2]),  # R2: Battery output power
                 pv_power=raw[84] + raw[85],  # R84-85: PV power
@@ -152,6 +152,16 @@ class DeyeInverter:
                 battery_voltage=battery_voltage,  # Register 587
                 bms_charge_current_limit=bms_charge_current_limit  # Register 212
             )
+            
+            # Sanity check: reject corrupt/glitched reads that could trigger false actions
+            if not (0 <= result.soc <= 100):
+                print(f"[INVERTER] Rejecting corrupt data: SOC={result.soc}%")
+                return None
+            if any(v <= 0 or v > 300 for v in result.voltages):
+                print(f"[INVERTER] Rejecting corrupt data: voltages={result.voltages}")
+                return None
+            
+            return result
             
         except Exception:
             self._modbus = None

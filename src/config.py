@@ -77,6 +77,7 @@ class OutletConfig:
     export_enabled: bool = True  # Enable export-based trigger
     export_limit: int = 5000
     export_delay: int = 300  # Seconds export must sustain above limit before trigger fires (default 5 min)
+    soc_delay: int = 180  # Seconds SOC must stay above start threshold before trigger fires (default 3 min)
     runtime_delay: int = 300  # Seconds lower priority outlets must wait (default 5 min)
     off_grid_mode: bool = False  # Enable off-grid mode (outlet runs without grid connection)
     on_grid_always_on: bool = False  # When on-grid, always keep outlet on regardless of SOC
@@ -119,6 +120,7 @@ def load_outlet_configs() -> List[OutletConfig]:
         export_enabled = os.getenv(f"{prefix}EXPORT_ENABLED", "true").lower() == "true"
         export_limit = int(os.getenv(f"{prefix}EXPORT_LIMIT", "5000"))
         export_delay = int(os.getenv(f"{prefix}EXPORT_DELAY", "300"))
+        soc_delay = int(os.getenv(f"{prefix}SOC_DELAY", "180"))
         runtime_delay = int(os.getenv(f"{prefix}RUNTIME_DELAY", "300"))
         off_grid_mode = os.getenv(f"{prefix}OFF_GRID_MODE", "false").lower() == "true"
         on_grid_always_on = os.getenv(f"{prefix}ON_GRID_ALWAYS_ON", "false").lower() == "true"
@@ -147,6 +149,7 @@ def load_outlet_configs() -> List[OutletConfig]:
             export_enabled=export_enabled,
             export_limit=export_limit,
             export_delay=export_delay,
+            soc_delay=soc_delay,
             runtime_delay=runtime_delay,
             off_grid_mode=off_grid_mode,
             on_grid_always_on=on_grid_always_on,

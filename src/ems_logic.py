@@ -37,6 +37,8 @@ class LogicResult(Enum):
     WAIT_SOC_RECOVERY = "Wait: SOC Recovery"
     WAIT_RESTART_DELAY = "Wait: Restart Delay"
     WAIT_EXPORT_DELAY = "Wait: Export Delay"
+    WAIT_SOC_DELAY = "Wait: SOC Delay"
+    WAIT_HV_DELAY = "Wait: HV Delay"
     TAPO_OFFLINE = "HP: TAPO OFFLINE"
 
 
@@ -60,6 +62,8 @@ class LogicState:
     last_seen_on: dict[int, bool] = None  # outlet_id -> was ON last cycle
     restart_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when OFF was detected
     export_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when export first exceeded limit
+    soc_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when SOC first exceeded start threshold
+    hv_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when HV first exceeded threshold
     
     def __post_init__(self):
         if self.lv_timers is None:
@@ -78,6 +82,10 @@ class LogicState:
             self.restart_delay_start = {}
         if self.export_delay_start is None:
             self.export_delay_start = {}
+        if self.soc_delay_start is None:
+            self.soc_delay_start = {}
+        if self.hv_delay_start is None:
+            self.hv_delay_start = {}
     
     def reset_lv_timer(self, outlet_id: int) -> None:
         """Reset the low-voltage timer for an outlet."""
@@ -206,6 +214,58 @@ class LogicState:
     def clear_restart_delay(self, outlet_id: int) -> None:
         """Clear the restart delay for an outlet."""
         self.restart_delay_start[outlet_id] = None
+
+    def start_soc_delay(self, outlet_id: int) -> None:
+        """Start the SOC delay timer for an outlet if not already started."""
+        if outlet_id not in self.soc_delay_start or self.soc_delay_start[outlet_id] is None:
+            self.soc_delay_start[outlet_id] = time.time()
+            print(f"[EMS] SOC delay started for outlet {outlet_id}")
+
+    def reset_soc_delay(self, outlet_id: int) -> None:
+        """Reset the SOC delay timer (SOC dropped below threshold)."""
+        if self.soc_delay_start.get(outlet_id) is not None:
+            self.soc_delay_start[outlet_id] = None
+
+    def soc_delay_elapsed(self, outlet_id: int, delay: int) -> bool:
+        """Check if SOC delay timer has exceeded the configured delay."""
+        start = self.soc_delay_start.get(outlet_id)
+        if start is None:
+            return False
+        return (time.time() - start) >= delay
+
+    def get_soc_delay_remaining(self, outlet_id: int, delay: int) -> float:
+        """Get remaining SOC delay in seconds."""
+        start = self.soc_delay_start.get(outlet_id)
+        if start is None:
+            return 0.0
+        remaining = delay - (time.time() - start)
+        return max(0.0, remaining)
+
+    def start_hv_delay(self, outlet_id: int) -> None:
+        """Start the HV delay timer for an outlet if not already started."""
+        if outlet_id not in self.hv_delay_start or self.hv_delay_start[outlet_id] is None:
+            self.hv_delay_start[outlet_id] = time.time()
+            print(f"[EMS] HV delay started for outlet {outlet_id}")
+
+    def reset_hv_delay(self, outlet_id: int) -> None:
+        """Reset the HV delay timer (voltage dropped below threshold)."""
+        if self.hv_delay_start.get(outlet_id) is not None:
+            self.hv_delay_start[outlet_id] = None
+
+    def hv_delay_elapsed(self, outlet_id: int, delay: int) -> bool:
+        """Check if HV delay timer has exceeded the configured delay."""
+        start = self.hv_delay_start.get(outlet_id)
+        if start is None:
+            return False
+        return (time.time() - start) >= delay
+
+    def get_hv_delay_remaining(self, outlet_id: int, delay: int) -> float:
+        """Get remaining HV delay in seconds."""
+        start = self.hv_delay_start.get(outlet_id)
+        if start is None:
+            return 0.0
+        remaining = delay - (time.time() - start)
+        return max(0.0, remaining)
 
 
 class EMSLogic:
@@ -376,8 +436,19 @@ class EMSLogic:
             )
             export_watts = abs(data.grid_power) if data.grid_power < 0 else 0
             
-            # RESTART DELAY CHECK: If enabled, enforce cooldown after outlet turns off
-            if outlet.config.restart_delay_enabled:
+            # Check if any trigger would actually fire for this outlet
+            would_trigger = False
+            if outlet.config.on_grid_always_on and data.is_grid_connected:
+                would_trigger = True
+            elif outlet.config.voltage_enabled and hv_voltage >= outlet.config.hv_threshold:
+                would_trigger = True
+            elif outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
+                would_trigger = True
+            elif outlet.config.soc_enabled and data.soc >= outlet.config.start_soc:
+                would_trigger = True
+            
+            # RESTART DELAY CHECK: Only block if a trigger would actually fire
+            if outlet.config.restart_delay_enabled and would_trigger:
                 if self.state.is_restart_delayed(outlet.config.outlet_id, outlet.config.restart_delay_minutes):
                     remaining = self.state.get_restart_delay_remaining(outlet.config.outlet_id, outlet.config.restart_delay_minutes)
                     mins = int(remaining // 60)
@@ -462,10 +533,22 @@ class EMSLogic:
             # Trigger 1: High voltage dump (battery voltage too high) - if voltage trigger enabled
             if outlet.config.voltage_enabled and hv_voltage >= outlet.config.hv_threshold:
                 if soc_too_low:
+                    self.state.reset_hv_delay(outlet.config.outlet_id)
                     return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: HV {hv_voltage}V but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
+                # HV delay: reuse lv_delay value to require sustained high voltage
+                if outlet.config.lv_delay > 0:
+                    self.state.start_hv_delay(outlet.config.outlet_id)
+                    if not self.state.hv_delay_elapsed(outlet.config.outlet_id, outlet.config.lv_delay):
+                        remaining = self.state.get_hv_delay_remaining(outlet.config.outlet_id, outlet.config.lv_delay)
+                        mins, secs = divmod(int(remaining), 60)
+                        return LogicResult.WAIT_HV_DELAY, f"{outlet.config.name}: HV {hv_voltage}V ({mins}m{secs:02d}s)"
                 print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_HV_DUMP | HV={hv_voltage}V threshold={outlet.config.hv_threshold}V SOC={data.soc}% Grid={data.grid_power}W")
+                self.state.reset_hv_delay(outlet.config.outlet_id)
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_HV_DUMP, f"{outlet.config.name}: {hv_voltage}V"
+            else:
+                # Voltage dropped below HV threshold — reset HV timer
+                self.state.reset_hv_delay(outlet.config.outlet_id)
             
             # Trigger 2: Export dump (too much power being exported) - if export trigger enabled
             if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
@@ -489,9 +572,20 @@ class EMSLogic:
             
             # Trigger 3: SOC-based auto start (battery charged enough) - if SOC trigger enabled
             if outlet.config.soc_enabled and data.soc >= outlet.config.start_soc:
+                # SOC delay: wait for sustained SOC above threshold before triggering
+                if outlet.config.soc_delay > 0:
+                    self.state.start_soc_delay(outlet.config.outlet_id)
+                    if not self.state.soc_delay_elapsed(outlet.config.outlet_id, outlet.config.soc_delay):
+                        remaining = self.state.get_soc_delay_remaining(outlet.config.outlet_id, outlet.config.soc_delay)
+                        mins, secs = divmod(int(remaining), 60)
+                        return LogicResult.WAIT_SOC_DELAY, f"{outlet.config.name}: SOC {data.soc}% ({mins}m{secs:02d}s)"
                 print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_AUTO_START | SOC={data.soc}% start_soc={outlet.config.start_soc}% V={data.voltages} Grid={data.grid_power}W")
+                self.state.reset_soc_delay(outlet.config.outlet_id)
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_AUTO_START, f"{outlet.config.name}: SOC {data.soc}%"
+            else:
+                # SOC dropped below start threshold — reset SOC timer
+                self.state.reset_soc_delay(outlet.config.outlet_id)
         
         # All running outlets are OK
         if any(o.current_state for o in connected_outlets.values()):
@@ -532,6 +626,8 @@ class EMSLogic:
             LogicResult.WAIT_SOC_RECOVERY: "#E67E22",
             LogicResult.WAIT_RESTART_DELAY: "orange",
             LogicResult.WAIT_EXPORT_DELAY: "gold",
+            LogicResult.WAIT_SOC_DELAY: "#2ECC71",
+            LogicResult.WAIT_HV_DELAY: "cyan",
             LogicResult.TAPO_OFFLINE: "gray",
         }
         return colors.get(result, "white")

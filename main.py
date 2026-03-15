@@ -108,6 +108,7 @@ class DeyeApp(ctk.CTk):
                 "export_enabled": ctk.BooleanVar(value=outlet.config.export_enabled),
                 "export_limit": ctk.StringVar(value=str(outlet.config.export_limit)),
                 "export_delay": ctk.StringVar(value=str(outlet.config.export_delay)),
+                "soc_delay": ctk.StringVar(value=str(outlet.config.soc_delay)),
                 "off_grid_mode": ctk.BooleanVar(value=outlet.config.off_grid_mode),
                 "on_grid_always_on": ctk.BooleanVar(value=outlet.config.on_grid_always_on),
                 "restart_delay_enabled": ctk.BooleanVar(value=outlet.config.restart_delay_enabled),
@@ -1027,6 +1028,7 @@ class DeyeApp(ctk.CTk):
                 outlet.config.export_enabled = cfg_vars["export_enabled"].get()
                 outlet.config.export_limit = int(self._get_safe_value(cfg_vars["export_limit"], outlet.config.export_limit))
                 outlet.config.export_delay = int(self._get_safe_value(cfg_vars["export_delay"], outlet.config.export_delay))
+                outlet.config.soc_delay = int(self._get_safe_value(cfg_vars["soc_delay"], outlet.config.soc_delay))
                 outlet.config.off_grid_mode = cfg_vars["off_grid_mode"].get()
                 outlet.config.on_grid_always_on = cfg_vars["on_grid_always_on"].get()
                 outlet.config.restart_delay_enabled = cfg_vars["restart_delay_enabled"].get()
@@ -1043,6 +1045,11 @@ class DeyeApp(ctk.CTk):
         
         params = self._get_ems_parameters()
         result, detail = self.ems.process(data, params)
+        
+        # Log turn-on events to the UI log panel (not just terminal)
+        if result in (LogicResult.ON_HV_DUMP, LogicResult.ON_EXPORT_DUMP,
+                      LogicResult.ON_AUTO_START, LogicResult.ON_GRID_ALWAYS_ON):
+            self._log_error(f"EMS: {result.value} ({detail})")
         
         # Update UI
         color = EMSLogic.get_color_for_result(result)
