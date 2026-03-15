@@ -378,6 +378,7 @@ class EMSLogic:
             
             # Trigger 0: On-Grid Always On - if enabled and grid is connected, turn on
             if outlet.config.on_grid_always_on and data.is_grid_connected:
+                print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_GRID_ALWAYS_ON | SOC={data.soc}% V={data.voltages} Grid={data.grid_power}W Export={export_watts}W UPS={data.ups_loads}")
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_GRID_ALWAYS_ON, f"{outlet.config.name}: Grid connected"
             
@@ -385,6 +386,7 @@ class EMSLogic:
             if outlet.config.voltage_enabled and hv_voltage >= outlet.config.hv_threshold:
                 if soc_too_low:
                     return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: HV {hv_voltage}V but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
+                print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_HV_DUMP | HV={hv_voltage}V threshold={outlet.config.hv_threshold}V SOC={data.soc}% Grid={data.grid_power}W")
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_HV_DUMP, f"{outlet.config.name}: {hv_voltage}V"
             
@@ -392,11 +394,13 @@ class EMSLogic:
             if outlet.config.export_enabled and export_watts >= outlet.config.export_limit:
                 if soc_too_low:
                     return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: Export {export_watts}W but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
+                print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_EXPORT_DUMP | Export={export_watts}W limit={outlet.config.export_limit}W SOC={data.soc}% Grid={data.grid_power}W")
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_EXPORT_DUMP, f"{outlet.config.name}: {export_watts}W"
             
             # Trigger 3: SOC-based auto start (battery charged enough) - if SOC trigger enabled
             if outlet.config.soc_enabled and data.soc >= outlet.config.start_soc:
+                print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_AUTO_START | SOC={data.soc}% start_soc={outlet.config.start_soc}% V={data.voltages} Grid={data.grid_power}W")
                 self.tapo.turn_on(outlet.config.outlet_id)
                 return LogicResult.ON_AUTO_START, f"{outlet.config.name}: SOC {data.soc}%"
         
