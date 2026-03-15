@@ -6,6 +6,9 @@ A professional energy management system for Deye inverters with Tapo smart plug 
 
 import time
 import threading
+import sys
+import os
+from datetime import datetime
 import customtkinter as ctk
 
 from src.config import ems_defaults, deye_config, protection_config, get_app_path
@@ -25,6 +28,45 @@ from src.ui_components import (
     SunsetChargingPanel,
     BatteryStatsDialog,
 )
+
+
+class TeeWriter:
+    """Duplicates writes to both the original stream and a log file."""
+    def __init__(self, original, log_file):
+        self.original = original
+        self.log_file = log_file
+
+    def write(self, text):
+        if text:
+            self.original.write(text)
+            try:
+                self.log_file.write(text)
+                self.log_file.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        self.original.flush()
+        try:
+            self.log_file.flush()
+        except Exception:
+            pass
+
+    def fileno(self):
+        return self.original.fileno()
+
+
+def setup_file_logging():
+    """Setup logging to a timestamped file in a logs/ directory next to the app."""
+    logs_dir = get_app_path() / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = logs_dir / f"deye_{timestamp}.txt"
+    log_file = open(log_path, "w", encoding="utf-8")
+    sys.stdout = TeeWriter(sys.__stdout__, log_file)
+    sys.stderr = TeeWriter(sys.__stderr__, log_file)
+    print(f"[INIT] Log file: {log_path}")
+    return log_file
 
 
 class DeyeApp(ctk.CTk):
@@ -289,16 +331,13 @@ class DeyeApp(ctk.CTk):
             print("[INIT] Boost protection disabled at startup (sell mode detected in schedule)")
     
     def _log_error(self, message: str) -> None:
-        """Log error message to UI (called from background thread)."""
+        """Log error message to UI and log file (called from background thread)."""
+        print(f"[LOG] {message}")
         try:
             if self._main_loop_started:
                 self.after(0, lambda: self.log_viewer.add_log(message))
-            else:
-                # Main loop not started yet, just print to console
-                print(f"[LOG] {message}")
         except RuntimeError:
-            # Fallback if after() fails
-            print(f"[LOG] {message}")
+            pass
 
     def _open_battery_stats(self) -> None:
         """Open the Battery Statistics dialog with live BMS data."""
@@ -1071,10 +1110,14 @@ class DeyeApp(ctk.CTk):
 
 def main():
     """Application entry point."""
-    app = DeyeApp()
-    # Mark that main loop is starting (for safe error logging)
-    app._main_loop_started = True
-    app.mainloop()
+    log_file = setup_file_logging()
+    try:
+        app = DeyeApp()
+        # Mark that main loop is starting (for safe error logging)
+        app._main_loop_started = True
+        app.mainloop()
+    finally:
+        log_file.close()
 
 
 if __name__ == "__main__":
