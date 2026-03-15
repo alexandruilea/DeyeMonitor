@@ -177,6 +177,16 @@ class OutletSettingsPanel(ctk.CTkFrame):
         # Row 7: Low Voltage Recovery parameters (with slight extra spacing)
         self._add_setting_h("LV Recovery V:", variables["lv_recovery_voltage"], 7, 1, pady=(12, 10))
         self._add_setting_h("LV Recovery (s):", variables["lv_recovery_delay"], 7, 3, pady=(12, 10))
+        
+        # Row 8: Restart Delay - cooldown after outlet turns off before auto-restart
+        self.restart_delay_switch = ctk.CTkSwitch(
+            self, text="Restart Delay",
+            variable=variables["restart_delay_enabled"],
+            font=("Roboto", 10, "bold")
+        )
+        self.restart_delay_switch.grid(row=8, column=0, sticky="w", padx=10, pady=8)
+        
+        self._add_setting_h("Delay (min):", variables["restart_delay_minutes"], 8, 1)
     
     def update_headroom_status(self, available: int, required: int) -> None:
         """Update headroom status display with color coding."""

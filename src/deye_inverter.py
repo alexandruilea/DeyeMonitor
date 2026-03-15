@@ -54,6 +54,7 @@ class InverterData:
     total_loads: List[int]  # Total load consumption per phase [L1, L2, L3] - Total consumption (base 588 R62-64)
     running_state: int  # Running state (0=standby, 1=selfcheck, 2=normal, 3=alarm, 4=fault) - base 500 R0
     is_grid_connected: bool  # Grid relay status from AC relay register (base 552 Bit2)
+    battery_voltage: float = 0.0  # Battery voltage (V) - register 587
 
 
 class DeyeInverter:
@@ -122,6 +123,13 @@ class DeyeInverter:
             ac_relay_status = status_raw[52]  # Register 552
             is_grid_connected = bool(ac_relay_status & 0x04)  # Bit2
             
+            # Read battery voltage from register 587 (BMS summary block)
+            try:
+                batt_v_raw = self._modbus.read_holding_registers(587, 1)
+                battery_voltage = batt_v_raw[0] * 0.01
+            except Exception:
+                battery_voltage = 0.0
+            
             return InverterData(
                 soc=raw[0],  # R0: Battery capacity
                 battery_power=self._parse_signed(raw[2]),  # R2: Battery output power
@@ -132,7 +140,8 @@ class DeyeInverter:
                 grid_loads=[self._parse_signed(raw[34]), self._parse_signed(raw[35]), self._parse_signed(raw[36])],  # R34-36: Grid side phase power (actual grid import/export per phase)
                 total_loads=[self._parse_signed(raw[62]), self._parse_signed(raw[63]), self._parse_signed(raw[64])],  # R62-64: Total load consumption per phase
                 running_state=status_raw[0],  # R0 of base 500: Running state
-                is_grid_connected=is_grid_connected  # Bit2 of register 552
+                is_grid_connected=is_grid_connected,  # Bit2 of register 552
+                battery_voltage=battery_voltage  # Register 587
             )
             
         except Exception:
@@ -282,14 +291,21 @@ class DeyeInverter:
             if time.time() - cached_time < min_interval:
                 # Different value but too soon - skip to reduce flash wear
                 print(f"  [WRITE] Throttled: register {register} write deferred ({int(time.time() - cached_time)}s < {min_interval}s interval)")
-                return True
+                return False
         
         for attempt in range(retries):
             try:
                 if not self._connect():
                     print(f"  [WRITE] Failed to connect")
                     return False
-                print(f"  [WRITE] Writing {value} to register {register}...")
+                
+                # Read current register value to avoid unnecessary writes
+                current = self._modbus.read_holding_registers(register, 1)
+                if current and current[0] == value:
+                    self._write_cache[register] = (value, time.time())
+                    return True
+                
+                print(f"  [WRITE] Writing {value} to register {register} (was {current[0] if current else '?'})...")
                 # Use write_multiple_holding_registers (function code 16) instead of 
                 # write_holding_register (function code 6) - this is what deye-controller uses
                 self._modbus.write_multiple_holding_registers(register, [value])

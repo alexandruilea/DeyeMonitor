@@ -79,6 +79,8 @@ class OutletConfig:
     runtime_delay: int = 300  # Seconds lower priority outlets must wait (default 5 min)
     off_grid_mode: bool = False  # Enable off-grid mode (outlet runs without grid connection)
     on_grid_always_on: bool = False  # When on-grid, always keep outlet on regardless of SOC
+    restart_delay_enabled: bool = False  # Enable restart delay after outlet turns off
+    restart_delay_minutes: int = 30  # Minutes to wait before auto-restarting after turn-off
 
 
 def load_outlet_configs() -> List[OutletConfig]:
@@ -118,6 +120,8 @@ def load_outlet_configs() -> List[OutletConfig]:
         runtime_delay = int(os.getenv(f"{prefix}RUNTIME_DELAY", "300"))
         off_grid_mode = os.getenv(f"{prefix}OFF_GRID_MODE", "false").lower() == "true"
         on_grid_always_on = os.getenv(f"{prefix}ON_GRID_ALWAYS_ON", "false").lower() == "true"
+        restart_delay_enabled = os.getenv(f"{prefix}RESTART_DELAY_ENABLED", "true").lower() == "true"
+        restart_delay_minutes = int(os.getenv(f"{prefix}RESTART_DELAY_MINUTES", "30"))
         
         outlets.append(OutletConfig(
             outlet_id=i,
@@ -142,7 +146,9 @@ def load_outlet_configs() -> List[OutletConfig]:
             export_limit=export_limit,
             runtime_delay=runtime_delay,
             off_grid_mode=off_grid_mode,
-            on_grid_always_on=on_grid_always_on
+            on_grid_always_on=on_grid_always_on,
+            restart_delay_enabled=restart_delay_enabled,
+            restart_delay_minutes=restart_delay_minutes
         ))
         
         i += 1

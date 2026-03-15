@@ -109,6 +109,8 @@ class DeyeApp(ctk.CTk):
                 "export_limit": ctk.StringVar(value=str(outlet.config.export_limit)),
                 "off_grid_mode": ctk.BooleanVar(value=outlet.config.off_grid_mode),
                 "on_grid_always_on": ctk.BooleanVar(value=outlet.config.on_grid_always_on),
+                "restart_delay_enabled": ctk.BooleanVar(value=outlet.config.restart_delay_enabled),
+                "restart_delay_minutes": ctk.StringVar(value=str(outlet.config.restart_delay_minutes)),
             }
 
     def _setup_ui(self) -> None:
@@ -644,6 +646,12 @@ class DeyeApp(ctk.CTk):
             sunset_boost = ((sunset_boost + 9) // 10) * 10
             
             if sunset_boost != self._sunset_boost_amps:
+                # Verify inverter has caught up before changing charge speed
+                if not self._is_charge_speed_settled(data, data.battery_voltage if data.battery_voltage > 0 else 52):
+                    self.after(0, lambda: self.sunset_panel.update_state(
+                        sunset_str, hours_left, required_amps, self._sunset_active))
+                    return
+                
                 self._sunset_boost_amps = sunset_boost
                 self._sunset_active = True
                 self._last_sunset_adjustment = current_time
@@ -681,6 +689,33 @@ class DeyeApp(ctk.CTk):
         # Use defaults
         defaults = self.schedule_panel.get_default_values()
         return defaults["max_charge_amps"]
+
+    def _is_charge_speed_settled(self, data, battery_voltage: float) -> bool:
+        """Check if the inverter's actual charging power is within 10% of the expected power.
+        
+        The inverter can lag behind when adjusting max charge/discharge amps.
+        Before changing the setting again, verify the actual battery power
+        has caught up to within 10% of (current_max_charge × battery_voltage).
+        
+        Returns True if settled (OK to adjust), False if still ramping.
+        """
+        if self._current_max_charge is None or battery_voltage <= 0:
+            return True  # No prior setting or no voltage reading — allow adjustment
+        
+        # Only check when battery is actually charging (positive power = charging)
+        if data.battery_power <= 0:
+            return True  # Not charging (discharging or idle) — allow adjustment
+        
+        expected_power = self._current_max_charge * battery_voltage
+        actual_power = data.battery_power
+        
+        # Check if actual power is within 10% of expected
+        if abs(actual_power - expected_power) > expected_power * 0.10:
+            print(f"[CHARGE] Waiting for inverter to settle: actual={actual_power}W vs expected={expected_power:.0f}W "
+                  f"({self._current_max_charge}A × {battery_voltage:.1f}V), diff={abs(actual_power - expected_power) / expected_power:.0%}")
+            return False
+        
+        return True
 
     def _process_overpower_protection(self, data) -> None:
         """
@@ -723,7 +758,7 @@ class DeyeApp(ctk.CTk):
         voltage_warning = settings["voltage_warning"]
         voltage_recovery = settings["voltage_recovery"]
         charge_step = settings["charge_step"]
-        battery_voltage = protection_config.battery_nominal_voltage
+        battery_voltage = data.battery_voltage if data.battery_voltage > 0 else protection_config.battery_nominal_voltage
         
         # Target power: midpoint between warning and recovery (stable equilibrium)
         target_power = (power_warning_threshold + power_recovery_threshold) / 2
@@ -736,6 +771,13 @@ class DeyeApp(ctk.CTk):
         max_charge_limit = deye_config.max_charge_amps_limit
         
         if needs_boost:
+            # Verify inverter has caught up to current charge setting before increasing further
+            if not self._is_charge_speed_settled(data, battery_voltage):
+                self.after(0, lambda: self.protection_panel.update_protection_state(
+                    self._protection_active, self._protection_boost_amps
+                ))
+                return
+            
             # Calculate proportional step: how many amps to absorb excess above target
             excess_power = export_power - target_power
             proportional_step = int(excess_power / battery_voltage) if battery_voltage > 0 else charge_step
@@ -770,6 +812,13 @@ class DeyeApp(ctk.CTk):
                     self._protection_active = False
                     self._last_protection_adjustment = current_time
             else:
+                # Verify inverter has caught up before reducing further
+                if not self._is_charge_speed_settled(data, battery_voltage):
+                    self.after(0, lambda: self.protection_panel.update_protection_state(
+                        self._protection_active, self._protection_boost_amps
+                    ))
+                    return
+                
                 # Calculate proportional step: how many amps of headroom we have below target
                 margin_power = target_power - export_power
                 proportional_step = int(margin_power / battery_voltage) if battery_voltage > 0 else charge_step
@@ -960,6 +1009,8 @@ class DeyeApp(ctk.CTk):
                 outlet.config.export_limit = int(self._get_safe_value(cfg_vars["export_limit"], outlet.config.export_limit))
                 outlet.config.off_grid_mode = cfg_vars["off_grid_mode"].get()
                 outlet.config.on_grid_always_on = cfg_vars["on_grid_always_on"].get()
+                outlet.config.restart_delay_enabled = cfg_vars["restart_delay_enabled"].get()
+                outlet.config.restart_delay_minutes = int(self._get_safe_value(cfg_vars["restart_delay_minutes"], outlet.config.restart_delay_minutes))
 
     def _process_logic(self, data: InverterData) -> None:
         """Process EMS logic (called from background thread)."""

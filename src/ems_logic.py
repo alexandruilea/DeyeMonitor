@@ -35,6 +35,7 @@ class LogicResult(Enum):
     WAIT_OFF_GRID = "Wait: Off-Grid Blocked"
     BLOCKED_BATTERY_LOW = "Blocked: Battery SOC Too Low"
     WAIT_SOC_RECOVERY = "Wait: SOC Recovery"
+    WAIT_RESTART_DELAY = "Wait: Restart Delay"
     TAPO_OFFLINE = "HP: TAPO OFFLINE"
 
 
@@ -55,6 +56,8 @@ class LogicState:
     lv_shutdown: dict[int, bool] = None  # outlet_id -> was_shut_down_by_lv
     lv_recovery_timers: dict[int, Optional[float]] = None  # outlet_id -> recovery_timer_start
     soc_shutdown: dict[int, bool] = None  # outlet_id -> was_shut_down_by_low_soc
+    last_seen_on: dict[int, bool] = None  # outlet_id -> was ON last cycle
+    restart_delay_start: dict[int, Optional[float]] = None  # outlet_id -> when OFF was detected
     
     def __post_init__(self):
         if self.lv_timers is None:
@@ -67,6 +70,10 @@ class LogicState:
             self.lv_recovery_timers = {}
         if self.soc_shutdown is None:
             self.soc_shutdown = {}
+        if self.last_seen_on is None:
+            self.last_seen_on = {}
+        if self.restart_delay_start is None:
+            self.restart_delay_start = {}
     
     def reset_lv_timer(self, outlet_id: int) -> None:
         """Reset the low-voltage timer for an outlet."""
@@ -138,6 +145,37 @@ class LogicState:
     def is_soc_shutdown(self, outlet_id: int) -> bool:
         """Check if outlet is in SOC shutdown state."""
         return self.soc_shutdown.get(outlet_id, False)
+    
+    def update_restart_delay(self, outlet_id: int, is_on: bool) -> None:
+        """Track ON->OFF transitions to enforce restart delay."""
+        was_on = self.last_seen_on.get(outlet_id, False)
+        if was_on and not is_on:
+            # Outlet just turned off — start restart delay timer
+            self.restart_delay_start[outlet_id] = time.time()
+            print(f"[EMS] Restart delay started for outlet {outlet_id}")
+        elif is_on:
+            # Outlet is on — clear any pending restart delay
+            self.restart_delay_start[outlet_id] = None
+        self.last_seen_on[outlet_id] = is_on
+    
+    def is_restart_delayed(self, outlet_id: int, delay_minutes: int) -> bool:
+        """Check if outlet is still within restart delay cooldown."""
+        start = self.restart_delay_start.get(outlet_id)
+        if start is None:
+            return False
+        return (time.time() - start) < (delay_minutes * 60)
+    
+    def get_restart_delay_remaining(self, outlet_id: int, delay_minutes: int) -> float:
+        """Get remaining restart delay in seconds."""
+        start = self.restart_delay_start.get(outlet_id)
+        if start is None:
+            return 0.0
+        remaining = (delay_minutes * 60) - (time.time() - start)
+        return max(0.0, remaining)
+    
+    def clear_restart_delay(self, outlet_id: int) -> None:
+        """Clear the restart delay for an outlet."""
+        self.restart_delay_start[outlet_id] = None
 
 
 class EMSLogic:
@@ -235,12 +273,13 @@ class EMSLogic:
         # 4. CASCADE CONTROL - process connected outlets by priority
         sorted_outlets = sorted(connected_outlets.values(), key=lambda o: o.config.priority)
         
-        # Track runtime for running outlets
+        # Track runtime for running outlets and detect ON->OFF transitions for restart delay
         for outlet in sorted_outlets:
             if outlet.current_state:
                 self.state.start_runtime(outlet.config.outlet_id)
             else:
                 self.state.reset_runtime(outlet.config.outlet_id)
+            self.state.update_restart_delay(outlet.config.outlet_id, outlet.current_state)
         
         # First pass: Turn off outlets that violate their OFF conditions (reverse priority)
         for outlet in reversed(sorted_outlets):
@@ -306,6 +345,14 @@ class EMSLogic:
                 outlet.config.target_phase, data.voltages, data.ups_loads, params.phase_max
             )
             export_watts = abs(data.grid_power) if data.grid_power < 0 else 0
+            
+            # RESTART DELAY CHECK: If enabled, enforce cooldown after outlet turns off
+            if outlet.config.restart_delay_enabled:
+                if self.state.is_restart_delayed(outlet.config.outlet_id, outlet.config.restart_delay_minutes):
+                    remaining = self.state.get_restart_delay_remaining(outlet.config.outlet_id, outlet.config.restart_delay_minutes)
+                    mins = int(remaining // 60)
+                    secs = int(remaining % 60)
+                    return LogicResult.WAIT_RESTART_DELAY, f"{outlet.config.name}: {mins}m {secs}s remaining"
             
             # LOW VOLTAGE RECOVERY CHECK: If outlet was shut down by low voltage, check recovery
             if self.state.is_lv_shutdown(outlet.config.outlet_id):
@@ -441,6 +488,7 @@ class EMSLogic:
             LogicResult.WAIT_OFF_GRID: "#E74C3C",
             LogicResult.BLOCKED_BATTERY_LOW: "#E67E22",
             LogicResult.WAIT_SOC_RECOVERY: "#E67E22",
+            LogicResult.WAIT_RESTART_DELAY: "orange",
             LogicResult.TAPO_OFFLINE: "gray",
         }
         return colors.get(result, "white")
