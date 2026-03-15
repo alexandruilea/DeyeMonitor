@@ -766,7 +766,12 @@ class DeyeApp(ctk.CTk):
         
         # Determine if we need to boost or reduce
         needs_boost = (export_power >= power_warning_threshold) or (max_voltage >= voltage_warning)
-        can_recover = (export_power < power_recovery_threshold) and (max_voltage < voltage_recovery)
+        # Voltage hold: if voltage is still within hold margin of warning, don't recover
+        # even if export dropped. This prevents voltage-driven boosts from being backed down
+        # by the export recovery logic while voltage is still elevated.
+        voltage_hold_margin = settings.get("voltage_hold_margin", protection_config.voltage_hold_margin)
+        voltage_held = max_voltage >= (voltage_warning - voltage_hold_margin)
+        can_recover = (export_power < power_recovery_threshold) and (max_voltage < voltage_recovery) and not voltage_held
         
         base_charge = self._get_base_charge_amps()
         max_charge_limit = deye_config.max_charge_amps_limit
@@ -779,6 +784,16 @@ class DeyeApp(ctk.CTk):
                 ))
                 return
             
+            # BMS charge limit check: if the BMS reports a charge current limit,
+            # don't boost beyond what the BMS will accept
+            if data.bms_charge_current_limit > 0:
+                target_after_boost = base_charge + self._protection_boost_amps + charge_step
+                if target_after_boost > data.bms_charge_current_limit:
+                    self.after(0, lambda: self.protection_panel.update_protection_state(
+                        self._protection_active, self._protection_boost_amps, bms_limited=True
+                    ))
+                    return
+            
             # Calculate proportional step: how many amps to absorb excess above target
             excess_power = export_power - target_power
             proportional_step = int(excess_power / battery_voltage) if battery_voltage > 0 else charge_step
@@ -787,6 +802,9 @@ class DeyeApp(ctk.CTk):
             step = max(charge_step, proportional_step)
             
             new_boost = min(self._protection_boost_amps + step, max_charge_limit - base_charge)
+            # Cap at BMS charge current limit if available
+            if data.bms_charge_current_limit > 0:
+                new_boost = min(new_boost, max(0, data.bms_charge_current_limit - base_charge))
             if new_boost != self._protection_boost_amps:
                 self._protection_boost_amps = new_boost
                 self._protection_active = True

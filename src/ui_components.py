@@ -1061,6 +1061,19 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
         
         ctk.CTkLabel(settings_frame, text="V", font=("Roboto", 10)).grid(row=1, column=8, padx=(0, 10), pady=8)
         
+        # Voltage hold margin (V) - keeps boost while voltage is within this margin of warning
+        ctk.CTkLabel(
+            settings_frame, text="V Hold:",
+            font=("Roboto", 10),
+            text_color="#9B59B6"
+        ).grid(row=1, column=9, padx=5, pady=8, sticky="w")
+        
+        self.voltage_hold_margin = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.voltage_hold_margin.grid(row=1, column=10, padx=5, pady=8)
+        self.voltage_hold_margin.insert(0, str(protection_config.voltage_hold_margin))
+        
+        ctk.CTkLabel(settings_frame, text="V", font=("Roboto", 10)).grid(row=1, column=11, padx=(0, 10), pady=8)
+        
         # Current state display
         state_frame = ctk.CTkFrame(self, fg_color="transparent")
         state_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
@@ -1150,6 +1163,7 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
                 "recovery_threshold_pct": int(self.recovery_threshold.get()),
                 "voltage_warning": float(self.voltage_warning.get()),
                 "voltage_recovery": float(self.voltage_recovery.get()),
+                "voltage_hold_margin": float(self.voltage_hold_margin.get()),
                 "charge_step": int(self.charge_step.get()),
                 "adjustment_interval": protection_config.adjustment_interval,
             }
@@ -1162,6 +1176,7 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
                 "recovery_threshold_pct": protection_config.recovery_threshold_pct,
                 "voltage_warning": protection_config.voltage_warning,
                 "voltage_recovery": protection_config.voltage_recovery,
+                "voltage_hold_margin": protection_config.voltage_hold_margin,
                 "charge_step": protection_config.charge_step,
                 "adjustment_interval": protection_config.adjustment_interval,
             }
@@ -1184,17 +1199,19 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
             text_color=voltage_color
         )
     
-    def update_protection_state(self, active: bool, boost_amps: int = 0) -> None:
+    def update_protection_state(self, active: bool, boost_amps: int = 0, bms_limited: bool = False) -> None:
         """Update the protection state label."""
         if not self.enabled_var.get():
             self.lbl_protection_state.configure(text="Protection: Disabled", text_color="gray")
         elif active:
+            suffix = " BMS_Limit" if bms_limited else ""
             self.lbl_protection_state.configure(
-                text=f"Protection: ACTIVE (+{boost_amps}A boost)",
+                text=f"Protection: ACTIVE (+{boost_amps}A boost){suffix}",
                 text_color="#E74C3C"
             )
         else:
-            self.lbl_protection_state.configure(text="Protection: Standby", text_color="#2ECC71")
+            suffix = " BMS_Limit" if bms_limited else ""
+            self.lbl_protection_state.configure(text=f"Protection: Standby{suffix}", text_color="#F39C12" if bms_limited else "#2ECC71")
 
 
 class SunsetChargingPanel(ctk.CTkFrame):

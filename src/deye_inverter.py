@@ -55,6 +55,7 @@ class InverterData:
     running_state: int  # Running state (0=standby, 1=selfcheck, 2=normal, 3=alarm, 4=fault) - base 500 R0
     is_grid_connected: bool  # Grid relay status from AC relay register (base 552 Bit2)
     battery_voltage: float = 0.0  # Battery voltage (V) - register 587
+    bms_charge_current_limit: int = 0  # BMS charge current limit (A) - register 212
 
 
 class DeyeInverter:
@@ -130,6 +131,13 @@ class DeyeInverter:
             except Exception:
                 battery_voltage = 0.0
             
+            # Read BMS charge current limit from register 212
+            try:
+                bms_raw = self._modbus.read_holding_registers(212, 1)
+                bms_charge_current_limit = bms_raw[0]
+            except Exception:
+                bms_charge_current_limit = 0
+            
             return InverterData(
                 soc=raw[0],  # R0: Battery capacity
                 battery_power=self._parse_signed(raw[2]),  # R2: Battery output power
@@ -141,7 +149,8 @@ class DeyeInverter:
                 total_loads=[self._parse_signed(raw[62]), self._parse_signed(raw[63]), self._parse_signed(raw[64])],  # R62-64: Total load consumption per phase
                 running_state=status_raw[0],  # R0 of base 500: Running state
                 is_grid_connected=is_grid_connected,  # Bit2 of register 552
-                battery_voltage=battery_voltage  # Register 587
+                battery_voltage=battery_voltage,  # Register 587
+                bms_charge_current_limit=bms_charge_current_limit  # Register 212
             )
             
         except Exception:

@@ -181,6 +181,7 @@ class OverpowerProtectionConfig:
     adjustment_interval: int = field(default_factory=lambda: int(os.getenv("PROTECTION_ADJUSTMENT_INTERVAL", "30")))
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("PROTECTION_ENABLED_AT_STARTUP", "false").lower() == "true")
     battery_nominal_voltage: int = field(default_factory=lambda: int(os.getenv("PROTECTION_BATTERY_NOMINAL_VOLTAGE", "52")))  # Nominal battery voltage for proportional amp calculation
+    voltage_hold_margin: float = field(default_factory=lambda: float(os.getenv("PROTECTION_VOLTAGE_HOLD_MARGIN", "5.0")))  # Hold boost if voltage within this margin of warning (V)
 
 
 @dataclass
