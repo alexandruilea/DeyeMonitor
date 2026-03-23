@@ -11,10 +11,12 @@ import os
 from datetime import datetime
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config, protection_config, get_app_path
+from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, get_app_path
 from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
+from src.tuya_charger import TuyaChargerManager
+from src.ev_logic import EVChargingLogic, EVSettings, EVResult
 from src.ui_components import (
     PhaseDisplay,
     SettingsPanel,
@@ -26,6 +28,7 @@ from src.ui_components import (
     TimeSchedulePanel,
     OverpowerProtectionPanel,
     SunsetChargingPanel,
+    EVChargerPanel,
     BatteryStatsDialog,
 )
 
@@ -90,6 +93,13 @@ class DeyeApp(ctk.CTk):
         self._inverter_lock = threading.Lock()  # Serialize modbus access across threads
         self.tapo = TapoManager(error_callback=self._log_error)
         self.ems = EMSLogic(self.tapo)
+        
+        # EV charger (Tuya)
+        self.ev_charger = None
+        self.ev_logic = None
+        if ev_charger_config.device_id:
+            self.ev_charger = TuyaChargerManager(ev_charger_config, error_callback=self._log_error)
+            self.ev_logic = EVChargingLogic(self.ev_charger)
         
         # Configuration variables
         self._init_config_variables()
@@ -231,6 +241,13 @@ class DeyeApp(ctk.CTk):
         )
         self.sunset_panel.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
+        # EV Charger Panel
+        self.ev_panel = EVChargerPanel(
+            self.scrollable,
+            on_settings_change=self._on_ev_change
+        )
+        self.ev_panel.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        
         # Track last applied schedule to avoid redundant writes
         self._last_applied_schedule = None
         
@@ -248,14 +265,14 @@ class DeyeApp(ctk.CTk):
             self.cfg,
             on_manual_toggle=self._on_manual_toggle
         )
-        self.settings.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+        self.settings.grid(row=10, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 11
+        current_row = 12
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -565,6 +582,11 @@ class DeyeApp(ctk.CTk):
                 self._sunset_active = False
                 self._last_applied_schedule = None
                 print("[SUNSET] Disabled - clearing boost")
+
+    def _on_ev_change(self) -> None:
+        """Handle EV charger panel settings change."""
+        if not self.ev_panel.is_enabled():
+            print("[EV] Disabled via UI")
 
 
 
@@ -911,6 +933,51 @@ class DeyeApp(ctk.CTk):
             self._protection_active, self._protection_boost_amps
         ))
 
+    def _process_ev_charging(self, data: InverterData) -> None:
+        """Process EV charger logic (called from background thread)."""
+        if self.ev_logic is None:
+            return
+
+        ui_settings = self.ev_panel.get_settings()
+        sunset_settings = self.sunset_panel.get_settings()
+
+        settings = EVSettings(
+            enabled=ui_settings["enabled"],
+            min_amps=ui_settings["min_amps"],
+            max_amps=ui_settings["max_amps"],
+            stop_soc=ui_settings["stop_soc"],
+            start_soc=ui_settings["start_soc"],
+            solar_mode=ui_settings["solar_mode"],
+            change_interval=ui_settings["change_interval"],
+            battery_capacity_ah=sunset_settings.get("battery_capacity_ah", 0),
+            charge_by_hour=ui_settings.get("charge_by_hour", 7),
+            grid_charge=ui_settings.get("grid_charge", False),
+            grid_charge_amps=ui_settings.get("grid_charge_amps", 20),
+        )
+
+        result, detail = self.ev_logic.process(data, settings)
+        charger_state = self.ev_charger.get_state()
+
+        # Log only on state changes to avoid spam
+        ev_key = (result, detail)
+        if ev_key != getattr(self, "_last_ev_key", None):
+            self._last_ev_key = ev_key
+            if result in (EVResult.CHARGING, EVResult.SOLAR_CHARGING,
+                          EVResult.SOC_TOO_LOW, EVResult.STOPPED,
+                          EVResult.CHARGER_OFFLINE, EVResult.BATTERY_PACED,
+                          EVResult.GRID_CHARGING, EVResult.GRID_PULL_STOP):
+                self._log_error(f"EV: {result.value} ({detail})")
+
+        self.after(0, lambda: self.ev_panel.update_ev_state(
+            connected=charger_state.is_connected,
+            is_on=charger_state.is_on,
+            charging=charger_state.is_charging,
+            error_state=charger_state.error_state,
+            current_amps=charger_state.current_amps,
+            result_text=result.value,
+            detail=detail,
+        ))
+
     def _on_manual_toggle(self) -> None:
         """Handle manual mode toggle."""
         is_manual = self.cfg["manual_mode"].get()
@@ -973,6 +1040,8 @@ class DeyeApp(ctk.CTk):
                     self._process_overpower_protection(data)
                     # Process sunset charging (may further boost if needed to reach target by sunset)
                     self._process_sunset_charging(data)
+                    # Process EV charger logic
+                    self._process_ev_charging(data)
                 else:
                     self.after(0, lambda: self.header.update_status("CONNECTING...", "orange"))
             
@@ -1104,6 +1173,8 @@ class DeyeApp(ctk.CTk):
     def destroy(self) -> None:
         """Clean up resources on window close."""
         self._running = False
+        if self.ev_charger:
+            self.ev_charger.stop()
         self.inverter.disconnect()
         super().destroy()
 

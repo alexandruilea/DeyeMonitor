@@ -14,3 +14,6 @@ python-dotenv>=1.0.0
 
 # Astronomical Calculations (sunset time)
 astral>=3.2
+
+# Tuya Local Device Control (EV Charger)
+tinytuya>=1.13.0

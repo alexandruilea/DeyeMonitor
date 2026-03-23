@@ -5,7 +5,7 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable
 
-from src.config import protection_config, deye_config, sunset_config, default_schedules
+from src.config import protection_config, deye_config, sunset_config, ev_charger_config, default_schedules
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -1388,6 +1388,242 @@ class SunsetChargingPanel(ctk.CTkFrame):
             self.lbl_required_amps.configure(text=f"Required: {required_amps}A", text_color=color)
         else:
             self.lbl_required_amps.configure(text="Standby", text_color="gray")
+
+
+class EVChargerPanel(ctk.CTkFrame):
+    """
+    Panel for EV smart charger control via Tuya.
+
+    Provides min/max amps, SOC thresholds, solar-follow mode, and a
+    configurable cooldown between changes.
+    """
+
+    def __init__(self, parent, on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10,
+                         border_width=1, border_color="#333333", **kwargs)
+        self.on_settings_change = on_settings_change
+        self.grid_columnconfigure(0, weight=1)
+
+        # ── Header ──────────────────────────────────────────────────
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            header, text="\U0001F50C EV SMART CHARGER",
+            font=("Roboto", 14, "bold"), text_color="#1ABC9C"
+        ).grid(row=0, column=0, sticky="w")
+
+        self.enabled_var = ctk.BooleanVar(value=ev_charger_config.enabled)
+        self.enable_switch = ctk.CTkSwitch(
+            header, text="Enable", variable=self.enabled_var,
+            font=("Roboto", 11, "bold"), command=self._on_enable_toggle
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        if ev_charger_config.enabled:
+            self.enable_switch.select()
+
+        _startup = ev_charger_config.enabled
+        self.lbl_status = ctk.CTkLabel(
+            header,
+            text="Active" if _startup else "Disabled",
+            font=("Roboto", 11),
+            text_color="#2ECC71" if _startup else "gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+
+        # ── Settings row 1: amps, SOC thresholds ────────────────────
+        sf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        sf.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        sf.grid_columnconfigure((1, 3, 5, 7, 9, 11, 15), weight=1)
+
+        ctk.CTkLabel(sf, text="Min Amps:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
+        self.min_amps = ctk.CTkEntry(sf, width=50, justify="center")
+        self.min_amps.grid(row=0, column=1, padx=5, pady=8)
+        self.min_amps.insert(0, str(ev_charger_config.min_amps))
+        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="Max Amps:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=0, column=3, padx=5, pady=8, sticky="w")
+        self.max_amps = ctk.CTkEntry(sf, width=50, justify="center")
+        self.max_amps.grid(row=0, column=4, padx=5, pady=8)
+        self.max_amps.insert(0, str(ev_charger_config.max_amps))
+        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="Start SOC:", font=("Roboto", 10)).grid(row=0, column=6, padx=5, pady=8, sticky="w")
+        self.start_soc = ctk.CTkEntry(sf, width=50, justify="center")
+        self.start_soc.grid(row=0, column=7, padx=5, pady=8)
+        self.start_soc.insert(0, str(ev_charger_config.start_soc))
+        ctk.CTkLabel(sf, text="%", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="Stop SOC:", font=("Roboto", 10)).grid(row=0, column=9, padx=5, pady=8, sticky="w")
+        self.stop_soc = ctk.CTkEntry(sf, width=50, justify="center")
+        self.stop_soc.grid(row=0, column=10, padx=5, pady=8)
+        self.stop_soc.insert(0, str(ev_charger_config.stop_soc))
+        ctk.CTkLabel(sf, text="%", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="Charge by:", font=("Roboto", 10),
+                      text_color="#95A5A6").grid(row=0, column=12, padx=5, pady=8, sticky="w")
+        self.charge_by_hour = ctk.CTkEntry(sf, width=50, justify="center")
+        self.charge_by_hour.grid(row=0, column=13, padx=5, pady=8)
+        self.charge_by_hour.insert(0, f"{ev_charger_config.charge_by_hour}:00")
+        ctk.CTkLabel(sf, text="h", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 10), pady=8)
+
+        # ── Settings row 2: cooldown & solar mode ───────────────────
+        ctk.CTkLabel(sf, text="Cooldown:", font=("Roboto", 10),
+                      text_color="#95A5A6").grid(row=1, column=0, padx=(10, 5), pady=8, sticky="w")
+        self.change_interval = ctk.CTkEntry(sf, width=50, justify="center")
+        self.change_interval.grid(row=1, column=1, padx=5, pady=8)
+        self.change_interval.insert(0, str(ev_charger_config.change_interval_minutes))
+        ctk.CTkLabel(sf, text="min", font=("Roboto", 10)).grid(row=1, column=2, padx=(0, 10), pady=8)
+
+        self.solar_var = ctk.BooleanVar(value=ev_charger_config.solar_mode)
+        self.solar_switch = ctk.CTkSwitch(
+            sf, text="Solar Follow (ramp amps to solar export)",
+            variable=self.solar_var,
+            font=("Roboto", 10, "bold"),
+            command=self._on_solar_toggle
+        )
+        self.solar_switch.grid(row=1, column=3, columnspan=5, padx=10, pady=8, sticky="w")
+        if ev_charger_config.solar_mode:
+            self.solar_switch.select()
+
+        # Grid charge switch + amps (end of row 2)
+        self.grid_charge_var = ctk.BooleanVar(value=False)
+        self.grid_charge_switch = ctk.CTkSwitch(
+            sf, text="Grid charge at",
+            variable=self.grid_charge_var,
+            font=("Roboto", 10, "bold"),
+        )
+        self.grid_charge_switch.grid(row=1, column=8, columnspan=3, padx=(15, 5), pady=8, sticky="w")
+
+        self.grid_charge_amps = ctk.CTkEntry(sf, width=50, justify="center")
+        self.grid_charge_amps.grid(row=1, column=11, padx=2, pady=8)
+        self.grid_charge_amps.insert(0, str(ev_charger_config.grid_charge_amps))
+        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=1, column=12, padx=(0, 10), pady=8)
+
+        # ── Live state display ──────────────────────────────────────
+        state = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        state.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+        state.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.lbl_charger_status = ctk.CTkLabel(
+            state, text="Charger: --",
+            font=("Roboto", 11, "bold"), text_color="#888888"
+        )
+        self.lbl_charger_status.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        self.lbl_ev_amps = ctk.CTkLabel(
+            state, text="Amps: --",
+            font=("Roboto", 11, "bold"), text_color="#888888"
+        )
+        self.lbl_ev_amps.grid(row=0, column=1, padx=10, pady=5)
+
+        self.lbl_ev_result = ctk.CTkLabel(
+            state, text="--",
+            font=("Roboto", 11, "bold"), text_color="gray"
+        )
+        self.lbl_ev_result.grid(row=0, column=2, padx=10, pady=5, sticky="e")
+
+        # ── Info ────────────────────────────────────────────────────
+        ctk.CTkLabel(
+            self,
+            text="Controls a Tuya EV charger based on battery SOC and solar export. "
+                 "Changes are rate-limited to the configured cooldown.",
+            font=("Roboto", 10), text_color="#888888"
+        ).grid(row=3, column=0, pady=(5, 10))
+
+    # ── Callbacks ────────────────────────────────────────────────────
+
+    def _on_enable_toggle(self) -> None:
+        enabled = self.enabled_var.get()
+        self.lbl_status.configure(
+            text="Active" if enabled else "Disabled",
+            text_color="#2ECC71" if enabled else "gray"
+        )
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    def _on_solar_toggle(self) -> None:
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    # ── Public API ───────────────────────────────────────────────────
+
+    def is_enabled(self) -> bool:
+        return self.enabled_var.get()
+
+    def get_settings(self) -> dict:
+        """Return current settings as a dict matching EVSettings fields."""
+        try:
+            return {
+                "enabled": self.enabled_var.get(),
+                "min_amps": int(self.min_amps.get()),
+                "max_amps": int(self.max_amps.get()),
+                "stop_soc": int(self.stop_soc.get()),
+                "start_soc": int(self.start_soc.get()),
+                "solar_mode": self.solar_var.get(),
+                "change_interval": int(self.change_interval.get()),
+                "charge_by_hour": max(0, min(23, int(self.charge_by_hour.get().split(":")[0]))),
+                "grid_charge": self.grid_charge_var.get(),
+                "grid_charge_amps": int(self.grid_charge_amps.get()),
+            }
+        except (ValueError, TypeError):
+            return {
+                "enabled": False,
+                "min_amps": ev_charger_config.min_amps,
+                "max_amps": ev_charger_config.max_amps,
+                "stop_soc": ev_charger_config.stop_soc,
+                "start_soc": ev_charger_config.start_soc,
+                "solar_mode": ev_charger_config.solar_mode,
+                "change_interval": ev_charger_config.change_interval_minutes,
+                "charge_by_hour": ev_charger_config.charge_by_hour,
+                "grid_charge": False,
+                "grid_charge_amps": ev_charger_config.grid_charge_amps,
+            }
+    def update_ev_state(self, connected: bool, is_on: bool, charging: bool,
+                        error_state: str, current_amps: int, result_text: str,
+                        detail: str) -> None:
+        """Update the live state display labels."""
+        # Charger connection status
+        if not connected:
+            self.lbl_charger_status.configure(text="Charger: Offline", text_color="#E74C3C")
+        elif error_state:
+            self.lbl_charger_status.configure(text=f"Charger: Error ({error_state})", text_color="#E74C3C")
+        elif charging:
+            self.lbl_charger_status.configure(text="Charger: Charging", text_color="#2ECC71")
+        elif is_on:
+            self.lbl_charger_status.configure(text="Charger: ON (waiting for EV)", text_color="#F39C12")
+        else:
+            self.lbl_charger_status.configure(text="Charger: Standby", text_color="#888888")
+
+        # Current amps
+        if connected:
+            self.lbl_ev_amps.configure(
+                text=f"Amps: {current_amps}A",
+                text_color="#1ABC9C" if charging else "#888888"
+            )
+        else:
+            self.lbl_ev_amps.configure(text="Amps: --", text_color="#888888")
+
+        # Logic result
+        full = f"{result_text}: {detail}" if detail else result_text
+        color_map = {
+            "Battery Paced": "#3498DB",
+            "Charging": "#2ECC71",
+            "Solar Charging": "#1ABC9C",
+            "Grid Charging": "#1ABC9C",
+            "Grid Pull Stop": "#E74C3C",
+            "Cooldown": "#F39C12",
+            "Stopped": "#E74C3C",
+            "Battery SOC too low": "#E74C3C",
+            "Waiting for SOC": "#95A5A6",
+            "Idle": "#888888",
+            "EV Disabled": "gray",
+            "Charger Offline": "#E74C3C",
+        }
+        self.lbl_ev_result.configure(text=full, text_color=color_map.get(result_text, "#888888"))
 
 
 class BatteryStatsDialog(ctk.CTkToplevel):

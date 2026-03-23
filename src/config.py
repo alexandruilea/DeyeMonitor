@@ -188,6 +188,29 @@ class OverpowerProtectionConfig:
 
 
 @dataclass
+class EVChargerConfig:
+    """Configuration for a Tuya-based EV charger."""
+    enabled: bool = field(default_factory=lambda: os.getenv("EV_CHARGER_ENABLED", "false").lower() == "true")
+    device_id: str = field(default_factory=lambda: os.getenv("EV_CHARGER_DEVICE_ID", ""))
+    ip: str = field(default_factory=lambda: os.getenv("EV_CHARGER_IP", ""))
+    local_key: str = field(default_factory=lambda: os.getenv("EV_CHARGER_LOCAL_KEY", ""))
+    protocol_version: float = field(default_factory=lambda: float(os.getenv("EV_CHARGER_PROTOCOL_VERSION", "3.3")))
+    min_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_MIN_AMPS", "8")))
+    max_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_MAX_AMPS", "32")))
+    stop_soc: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_STOP_SOC", "20")))
+    start_soc: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_START_SOC", "80")))
+    solar_mode: bool = field(default_factory=lambda: os.getenv("EV_CHARGER_SOLAR_MODE", "false").lower() == "true")
+    change_interval_minutes: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_CHANGE_INTERVAL", "5")))
+    charge_by_hour: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_CHARGE_BY_HOUR", "7")))  # Target hour (0-23) for battery-paced charging
+    grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_GRID_CHARGE_AMPS", "20")))  # Amps to use when grid-charging EV
+    # Tuya DPS mapping (varies by charger model)
+    dp_switch: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_SWITCH", "1")))
+    dp_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS", "6")))
+    dp_state: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_STATE", "124")))  # DP for charger state string
+    dp_amps_scale: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS_SCALE", "1")))  # 1=amps, 10=amps×10, 1000=milliamps
+
+
+@dataclass
 class SunsetChargingConfig:
     """Configuration for sunset-aware charging."""
     latitude: float = field(default_factory=lambda: float(os.getenv("SOLAR_LATITUDE", "47.00")))
@@ -238,4 +261,5 @@ outlet_configs = load_outlet_configs()
 ems_defaults = EMSDefaults()
 protection_config = OverpowerProtectionConfig()
 sunset_config = SunsetChargingConfig()
+ev_charger_config = EVChargerConfig()
 default_schedules = load_default_schedules()
