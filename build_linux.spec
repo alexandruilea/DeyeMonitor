@@ -32,6 +32,8 @@ a = Analysis(
         'src.ems_logic',
         'src.ui_components',
         'src.tuya_charger',
+        'src.tuya_heatpump',
+        'src.tuya_heatpump_logic',
         'src.ev_logic',
         'tinytuya',
         'astral',

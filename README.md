@@ -1,8 +1,8 @@
 # Deye Inverter EMS Pro
 
-A professional Energy Management System for Deye inverters with Tapo smart plug integration for heat pump control.
+A professional Energy Management System for Deye inverters with Tapo smart plug and Tuya socket thermostat integration for heat pump and consumer load control.
 
-<!-- README last updated at commit: 634f7d7 (2026-03-16) -->
+<!-- README last updated at commit: abc73e3 (2026-03-26) -->
 
 ## Features
 
@@ -27,24 +27,41 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Configurable target SOC, buffer time, and battery capacity
   - 10A step rounding and throttled writes to avoid excessive register writes
   - Automatically coordinates with battery boost protection (protection yields when sunset charging is active)
-- 🔥 Automatic heat pump / consumer control based on:
-  - Battery SOC thresholds
-  - Grid export detection
-  - High voltage dumping
-- 🔋 **SOC Recovery Hysteresis** - Prevents outlet on/off cycling when SOC is near thresholds:
-  - Outlets shut down at Stop SOC are blocked from export/HV restart until SOC recovers to midpoint of (Stop SOC + Start SOC)
-  - Prevents heatpump cycling when export limit is reached but battery is low
-- ⏱️ **SOC Trigger Delay** - SOC must stay above the start threshold for a configurable duration (default 3 min) before triggering, preventing false starts from transient inverter data read errors
-- ⏳ **Export Trigger Delay** - Grid export must sustain above the limit for a configurable duration before triggering, giving battery boost protection time to react first
-- 🔄 **Restart Delay** - Configurable cooldown after an outlet turns off before it can auto-restart, preventing rapid on/off cycling
-- 🛡️ Safety features:
-  - Phase overload protection
-  - Critical undervoltage protection
-  - Low voltage delay timer with recovery voltage/delay
-  - Separate charge/discharge hardware amp limits (multi-battery support)
-- 🏛️ **On-Grid Always On** - Optional mode to keep outlets always on when grid is connected
+- 🔥 **Heat Pump – Socket Thermostat (Tuya)** - Intelligent heat pump control via a Tuya socket thermostat (e.g. "Priză termostat PDC"):
+  - _Control_: Sets target temperature and hysteresis on the device; the thermostat firmware handles relay switching instantly (no relay toggling from the app)
+  - _Scheduling_: Time-based intervals with min/max temperature ranges; device turns ON below min, OFF at max
+  - _Overrides_ (evaluated in priority order):
+    - **LV shutdown** — Forces OFF after sustained low voltage; recovery requires voltage above threshold for a configurable delay
+    - **HV dump** — Forces ON (80 °C) when any phase exceeds HV threshold; hysteresis OFF with delay below HV OFF threshold
+    - **SOC low** — Forces OFF with configurable delay, then locks out schedule until SOC recovers to ON threshold
+    - **SOC high** — Forces ON using the active schedule temperature (not 80 °C) when SOC ≥ ON threshold; deactivates on sustained grid import > 50 % of HP power
+    - **Solar export** — Forces ON (80 °C) when grid export exceeds threshold; configurable OFF delay rides through brief inverter glitches
+  - _Monitoring_: Supports L1, L2, L3, or ANY phase (uses min voltage for LV, max for HV); live "OFF in Xs" / "Recovery in Xs" countdown for all delayed transitions
+- 🔌 **EV Smart Charger (Tuya)** - Intelligent EV charging via a Tuya-enabled charger (e.g. feyree):
+  - _Charging modes_:
+    - **Fixed-rate** — Charges at max amps while home battery SOC is above start threshold
+    - **Solar-follow** — Scales amperage in real time based on solar export surplus (export_watts / 230 V)
+    - **Grid charge** — Always charges at configured amps while grid is connected
+    - **Battery pacing** — At night, spreads charge over remaining hours until a target time to avoid draining the house battery
+  - _Protection_:
+    - **SOC-gated** — Only starts when SOC ≥ start threshold; stops if it drops to stop threshold
+    - **Grid-pull stop** — Stops charging if grid import is sustained for 5+ minutes (battery exhausted)
+    - **Safe amp changes** — Stops charger before lowering amps, waits 5 s, then restarts to prevent overcurrent trips
+  - _Rate limiting_: Configurable cooldown between any charger state changes
+- 🔥 **Tapo Smart Plug Outlets** - Automatic consumer control via TP-Link Tapo smart plugs:
+  - _Triggers_: Battery SOC threshold, grid export detection, high-voltage dumping
+  - _Safety_:
+    - **SOC recovery hysteresis** — Outlets shut down at Stop SOC are blocked from restart until SOC recovers to midpoint of (Stop SOC + Start SOC)
+    - **SOC trigger delay** — SOC must stay above start threshold for a configurable duration (default 3 min) to prevent false starts
+    - **Export trigger delay** — Grid export must sustain above the limit before triggering, giving battery boost protection time to react first
+    - **Phase overload protection** — Per-phase watt limit with immediate cutoff
+    - **Critical undervoltage** — Immediate shutdown at safety voltage
+    - **LV delay + recovery** — Low voltage timer with recovery voltage/delay
+  - _Modes_:
+    - **Restart delay** — Configurable cooldown after off before auto-restart
+    - **On-Grid Always On** — Keep outlets always on when grid is connected
+    - **Manual override** — Direct on/off control from the UI
 - 📝 **Persistent File Logging** - All console output is duplicated to timestamped log files in a `logs/` directory for post-mortem analysis
-- 🎮 Manual override mode
 - 🔧 Fully configurable parameters via `.env` file
 
 ## Project Structure
@@ -63,8 +80,12 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     ├── __init__.py         # Package exports
     ├── config.py           # Configuration management
     ├── deye_inverter.py    # Deye inverter communication
+    ├── ems_logic.py        # Energy management logic (Tapo outlets)
+    ├── tev_logic.py         # EV smart charging decision engine
     ├── tapo_manager.py     # Tapo smart plug control
-    ├── ems_logic.py        # Energy management logic
+    ├── tuya_charger.py     # Tuya EV charger device manager
+    ├── tuya_heatpump.py    # Tuya thermostat device manager
+    ├── tuya_heatpump_logic.py  # Heat pump decision engine
     └── ui_components.py    # CustomTkinter UI widgets
 ```
 
@@ -143,18 +164,18 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 #### Battery Boost Protection Settings
 
-| Variable                            | Description                                  | Default |
-| ----------------------------------- | -------------------------------------------- | ------- |
-| `PROTECTION_MAX_SELL_POWER`         | Max export power limit (W)                   | 8000    |
-| `PROTECTION_POWER_THRESHOLD_PCT`    | Start protection at this % of max export     | 95      |
-| `PROTECTION_RECOVERY_THRESHOLD_PCT` | Reduce protection below this %               | 85      |
-| `PROTECTION_VOLTAGE_WARNING`        | Start protection above this voltage (V)      | 251.5   |
-| `PROTECTION_VOLTAGE_RECOVERY`       | Reduce protection below this voltage (V)     | 249.0   |
-| `PROTECTION_CHARGE_STEP`            | Increase charging by this many Amps per step | 10      |
-| `PROTECTION_ADJUSTMENT_INTERVAL`    | Seconds between adjustments (stabilization)  | 10      |
-| `PROTECTION_ENABLED_AT_STARTUP`     | Enable protection automatically at startup   | true    |
-| `PROTECTION_BATTERY_NOMINAL_VOLTAGE`| Nominal battery voltage for proportional calc (V) | 52 |
-| `PROTECTION_VOLTAGE_HOLD_MARGIN`    | Hold boost if voltage within this of warning (V) | 5.0 |
+| Variable                             | Description                                       | Default |
+| ------------------------------------ | ------------------------------------------------- | ------- |
+| `PROTECTION_MAX_SELL_POWER`          | Max export power limit (W)                        | 8000    |
+| `PROTECTION_POWER_THRESHOLD_PCT`     | Start protection at this % of max export          | 95      |
+| `PROTECTION_RECOVERY_THRESHOLD_PCT`  | Reduce protection below this %                    | 85      |
+| `PROTECTION_VOLTAGE_WARNING`         | Start protection above this voltage (V)           | 251.5   |
+| `PROTECTION_VOLTAGE_RECOVERY`        | Reduce protection below this voltage (V)          | 249.0   |
+| `PROTECTION_CHARGE_STEP`             | Increase charging by this many Amps per step      | 10      |
+| `PROTECTION_ADJUSTMENT_INTERVAL`     | Seconds between adjustments (stabilization)       | 10      |
+| `PROTECTION_ENABLED_AT_STARTUP`      | Enable protection automatically at startup        | true    |
+| `PROTECTION_BATTERY_NOMINAL_VOLTAGE` | Nominal battery voltage for proportional calc (V) | 52      |
+| `PROTECTION_VOLTAGE_HOLD_MARGIN`     | Hold boost if voltage within this of warning (V)  | 5.0     |
 
 #### Sunset Charging Settings
 
@@ -177,6 +198,97 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 | `OUTLET_N_PASS`     | Tapo account password      |
 | `OUTLET_N_NAME`     | Display name in UI         |
 | `OUTLET_N_PRIORITY` | Priority (1=highest)       |
+
+#### TEV Smart Charger (Tuya)
+
+| Variable                      | Descriptio n                                                | Default |
+| ----------------------------- | ----------------------------------------------------------- | ------- |
+| `EV_CHARGER_ENABLED      `    | Enable EV charger control at startu p                       | `false` |
+| `EV_CHARGER_DEVICE_ID  `      | Tuya Device ID (from `tinytuya wizard` )                    |         |
+| `EV_CHARGER_IP     `          | Charger IP address on local networ k                        |         |
+| `EV_CHARGER_LOCAL_KEY       ` | Tuya Local Key (from `tinytuya wizard` )                    |         |
+| `EV_CHARGER_PROTOCOL_VERSION` | Tuya protocol version (3.3 / 3.4 )                          | `3.3  ` |
+| `EV_CHARGER_MIN_AMPS`         | Minimum charging current (A )                               | `8    ` |
+| `EV_CHARGER_MAX_AMPS    `     | Maximum charging current (A )                               | `32   ` |
+| `EV_CHARGER_STOP_SOC`         | Stop EV charging when home battery drops below this SOC (%) | `20  `  |
+| `EV_CHARGER_START_SOC    `    | Only start EV charging above this SOC (% )                  | `80 `   |
+| `EV_CHARGER_SOLAR_MODE`       | Scale amps based on solar export surplu s                   | `false` |
+| `EV_CHARGER_CHANGE_INTERVAL`  | Minutes between charger state change s                      | `5    ` |
+| `EV_CHARGER_CHARGE_BY_HOUR  ` | Target hour (0-23) for battery-paced chargin g              | `7    ` |
+| `EV_CHARGER_GRID_CHARGE_AMPS` | Amps to use in grid charge mod e                            | `20   ` |
+
+**Tuya DPS Mapping (charger model-specific):**
+
+| Variabl e                  | Descriptio n                                           | Default |
+| -------------------------- | ------------------------------------------------------ | ------- |
+| `EV_CHARGER_DP_SWITCH  `   | DP for on/off switc h                                  | `1  `   |
+| `EV_CHARGER_DP_AMPS`       | DP for current settin g                                | `6    ` |
+| `EV_CHARGER_DP_STATE     ` | DP for charger state strin g                           | `124  ` |
+| `EV_CHARGER_DP_AMPS_SCALE` | Scale factor: `1`=amps, `10`=amps×10, `1000`=milliamps | `1    ` |
+
+#### uya Heat Pump – Socket Thermostat
+
+| Variable                    | Description                              | Default     |
+| --------------------------- | ---------------------------------------- | ----------- |
+| `HEATPUMP_ENABLED`          | Enable Tuya heat pump control at startup | `false`     |
+| `HEATPUMP_DEVICE_ID`        | Tuya Device ID (from `tinytuya wizard`)  |             |
+| `HEATPUMP_IP`               | Outlet IP address on local network       |             |
+| `HEATPUMP_LOCAL_KEY`        | Tuya Local Key (from `tinytuya wizard`)  |             |
+| `HEATPUMP_PROTOCOL_VERSION` | Tuya protocol version (3.3 / 3.4 / 3.5)  | `3.5`       |
+| `HEATPUMP_NAME`             | Display name in UI                       | `Heat Pump` |
+
+**Tuya DPS Mapping (device model-specific):**
+
+| Variable                         | Description                                                 | Default |
+| -------------------------------- | ----------------------------------------------------------- | ------- |
+| `HEATPUMP_DP_SWITCH`             | DP for relay state (read-only in thermostat mode)           | `2`     |
+| `HEATPUMP_DP_TEMPERATURE`        | DP for current temperature (scaled)                         | `6`     |
+| `HEATPUMP_DP_TEMP_SET`           | DP for target temperature setting                           | `17`    |
+| `HEATPUMP_DP_HYSTERESIS`         | DP for hysteresis value                                     | `111`   |
+| `HEATPUMP_DP_MODE`               | DP for thermostat mode (heat/cool)                          | `4`     |
+| `HEATPUMP_DP_TEMP_SCALE`         | Scale factor: `1`=°C direct, `10`=°C×10                     | `10`    |
+| `HEATPUMP_STANDBY_TARGET`        | Target temp when standby (very low = relay OFF)             | `-30`   |
+| `HEATPUMP_SOLAR_OVERRIDE_TARGET` | Target temp during solar/HV override (very high = relay ON) | `80`    |
+
+**Solar Override:**
+
+| Variable                             | Description                                      | Default |
+| ------------------------------------ | ------------------------------------------------ | ------- |
+| `HEATPUMP_SOLAR_OVERRIDE`            | Enable solar override                            | `true`  |
+| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN` | Min grid export (W) to trigger ON                | `3000`  |
+| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`   | HP rated power (W) — stops if grid import > half | `3000`  |
+| `HEATPUMP_SOLAR_OVERRIDE_OFF_DELAY`  | Seconds before deactivating solar override       | `60`    |
+
+**SOC Overrides:**
+
+| Variable                     | Description                                     | Default |
+| ---------------------------- | ----------------------------------------------- | ------- |
+| `HEATPUMP_SOC_ON_THRESHOLD`  | SOC ≥ this % → force ON (uses schedule temp)    | `90`    |
+| `HEATPUMP_SOC_OFF_THRESHOLD` | SOC ≤ this % → force OFF (with delay + lockout) | `30`    |
+
+**Voltage Overrides:**
+
+| Variable                       | Description                                    | Default |
+| ------------------------------ | ---------------------------------------------- | ------- |
+| `HEATPUMP_TARGET_PHASE`        | Phase to monitor: L1 / L2 / L3 / ANY           | `ANY`   |
+| `HEATPUMP_HV_THRESHOLD`        | High voltage dump ON (V)                       | `252.0` |
+| `HEATPUMP_HV_OFF_THRESHOLD`    | HV hysteresis OFF (V)                          | `245.0` |
+| `HEATPUMP_LV_THRESHOLD`        | Low voltage shutdown (V)                       | `210.0` |
+| `HEATPUMP_LV_RECOVERY_VOLTAGE` | Voltage required for LV recovery (V)           | `220.0` |
+| `HEATPUMP_LV_RECOVERY_DELAY`   | Seconds voltage must stay above recovery level | `300`   |
+| `HEATPUMP_PHASE_CHANGE_DELAY`  | Seconds before voltage triggers activate       | `10`    |
+
+**Temperature Schedule Slots:**
+
+Format: `HEATPUMP_SCHEDULE_N=HH:MM-HH:MM,min_temp,max_temp`
+
+The thermostat is set to: `target=max_temp`, `hysteresis=(max_temp - min_temp)`. Device firmware handles relay: ON when temp < min_temp, OFF when temp ≥ max_temp.
+
+```env
+HEATPUMP_SCHEDULE_1=06:00-16:00,28,35       # Daytime: maintain 28-35°C
+HEATPUMP_SCHEDULE_2=16:00-18:00,40,45       # Peak hours: maintain 40-45°C
+HEATPUMP_SCHEDULE_3=18:00-06:00,28,35       # Evening/night: maintain 28-35°C
+```
 
 ### EMS Parameters (in-app configurable)
 
@@ -202,11 +314,44 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 | LV Recovery V     | Voltage required for recovery                     | 220V    |
 | LV Recovery Delay | Seconds voltage must stay above recovery          | 300s    |
 | Critical LV       | Safety voltage cutoff (immediate)                 | 185V    |
-| SOC Delay          | Seconds SOC must stay above start before trigger | 180s    |
-| Export Limit       | Grid export threshold to trigger outlet (W)      | 15000W  |
-| Export Delay       | Seconds export must sustain above limit           | 300s    |
-| Restart Delay      | Minutes cooldown before auto-restart after off   | 30min   |
-| On-Grid Always On  | Keep outlet always on when grid is connected     | false   |
+| SOC Delay         | Seconds SOC must stay above start before trigger  | 180s    |
+| Export Limit      | Grid export threshold to trigger outlet (W)       | 15000W  |
+| Export Delay      | Seconds export must sustain above limit           | 300s    |
+| Restart Delay     | Minutes cooldown before auto-restart after off    | 30min   |
+| On-Grid Always On | Keep outlet always on when grid is connected      | false   |
+
+#### EV Smart Charger
+
+| Parameter     | Description                                              | Default |
+| ------------- | -------------------------------------------------------- | ------- |
+| Enable        | Enable/disable EV charger control                        | Off     |
+| Min Amps      | Minimum charging current                                 | 8A      |
+| Max Amps      | Maximum charging current                                 | 32A     |
+| Start SOC     | Home battery SOC to start EV charging                    | 80%     |
+| Stop SOC      | Home battery SOC to stop EV charging                     | 20%     |
+| Charge by     | Target hour for battery-paced charging (night)           | 7:00    |
+| Cooldown      | Minutes between charger state changes                    | 5 min   |
+| Solar Follow  | Scale amps to match solar export surplus                 | Off     |
+| Grid charge   | Always charge at configured amps while grid is available | Off     |
+| Grid charge A | Amps to use in grid charge mode                          | 20A     |
+
+### Heat Pump – Socket Thermostat
+
+| Parameter        | Description                                                        | Default |
+| ---------------- | ------------------------------------------------------------------ | ------- |
+| Solar Override   | Enable/disable solar export override                               | On      |
+| Trigger W        | Minimum grid export watts to trigger solar override ON             | 3000W   |
+| HP Power W       | Heat pump rated power — solar override stops if grid import > half | 3000W   |
+| OFF Delay s      | Seconds before solar override / SOC override deactivates           | 60s     |
+| SOC ON %         | SOC ≥ this → force ON using schedule temp                          | 90%     |
+| SOC OFF %        | SOC ≤ this → force OFF with delay + lockout                        | 30%     |
+| HV ON V          | Voltage threshold to trigger HV dump (80 °C target)                | 252V    |
+| HV OFF V         | HV hysteresis OFF threshold                                        | 245V    |
+| LV OFF V         | Low voltage shutdown threshold                                     | 210V    |
+| Delay s          | Seconds voltage must sustain before HV/LV triggers                 | 10s     |
+| LV Recovery V    | Voltage required for LV recovery                                   | 220V    |
+| Recovery Delay s | Seconds voltage must stay above recovery threshold                 | 300s    |
+| Schedule slots   | Time intervals with min/max temperature ranges                     | —       |
 
 ## Usage
 
