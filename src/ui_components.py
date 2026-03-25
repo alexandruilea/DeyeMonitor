@@ -5,7 +5,7 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable
 
-from src.config import protection_config, deye_config, sunset_config, ev_charger_config, default_schedules
+from src.config import protection_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -174,7 +174,7 @@ class OutletSettingsPanel(ctk.CTkFrame):
         
         # Row 6: Voltage OFF parameters
         self._add_setting_h("Low V (OFF):", variables["lv_threshold"], 6, 1)
-        self._add_setting_h("HV/LV Delay (s):", variables["lv_delay"], 6, 3)
+        self._add_setting_h("Phase Delay (s):", variables["phase_change_delay"], 6, 3)
         
         # Row 7: Low Voltage Recovery parameters (with slight extra spacing)
         self._add_setting_h("LV Recovery V:", variables["lv_recovery_voltage"], 7, 1, pady=(12, 10))
@@ -1624,6 +1624,426 @@ class EVChargerPanel(ctk.CTkFrame):
             "Charger Offline": "#E74C3C",
         }
         self.lbl_ev_result.configure(text=full, text_color=color_map.get(result_text, "#888888"))
+
+
+class HeatpumpScheduleRow(ctk.CTkFrame):
+    """A single row in the heat pump temperature schedule."""
+
+    def __init__(self, parent, index: int, on_delete: Callable, on_value_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#2B2B2B", corner_radius=5, **kwargs)
+        self.index = index
+        self.on_delete = on_delete
+        self.on_value_change = on_value_change
+        self._dirty = False
+
+        # Enable checkbox
+        self.enabled_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(self, text="", variable=self.enabled_var, width=20).grid(
+            row=0, column=0, padx=(5, 10), pady=8)
+
+        # Start time
+        ctk.CTkLabel(self, text="From:", font=("Roboto", 10)).grid(row=0, column=1, padx=(0, 2), sticky="e")
+        self.start_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
+        self.start_hour.grid(row=0, column=2, padx=0)
+        self.start_hour.insert(0, "00")
+        ctk.CTkLabel(self, text=":", font=("Roboto", 10, "bold")).grid(row=0, column=3, padx=0)
+        self.start_min = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="MM")
+        self.start_min.grid(row=0, column=4, padx=0)
+        self.start_min.insert(0, "00")
+
+        # End time
+        ctk.CTkLabel(self, text="To:", font=("Roboto", 10)).grid(row=0, column=5, padx=(35, 2), sticky="e")
+        self.end_hour = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="HH")
+        self.end_hour.grid(row=0, column=6, padx=0)
+        self.end_hour.insert(0, "23")
+        ctk.CTkLabel(self, text=":", font=("Roboto", 10, "bold")).grid(row=0, column=7, padx=0)
+        self.end_min = ctk.CTkEntry(self, width=40, justify="center", placeholder_text="MM")
+        self.end_min.grid(row=0, column=8, padx=0)
+        self.end_min.insert(0, "59")
+
+        # Min temperature
+        ctk.CTkLabel(self, text="Min Temp:", font=("Roboto", 10, "bold"),
+                      text_color="#E74C3C").grid(row=0, column=9, padx=(50, 2))
+        self.min_temp = ctk.CTkEntry(self, width=60, justify="center")
+        self.min_temp.grid(row=0, column=10, padx=2)
+        self.min_temp.insert(0, "28")
+        self.min_temp.bind("<Key>", lambda e: self._mark_dirty())
+        self.min_temp.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="°C", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 20))
+
+        # Max temperature
+        ctk.CTkLabel(self, text="Max Temp:", font=("Roboto", 10, "bold"),
+                      text_color="#2ECC71").grid(row=0, column=12, padx=(30, 2))
+        self.max_temp = ctk.CTkEntry(self, width=60, justify="center")
+        self.max_temp.grid(row=0, column=13, padx=2)
+        self.max_temp.insert(0, "35")
+        self.max_temp.bind("<Key>", lambda e: self._mark_dirty())
+        self.max_temp.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="°C", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 10))
+
+        # Spacer + delete button
+        self.grid_columnconfigure(15, weight=1)
+        ctk.CTkButton(
+            self, text="✕", width=30, height=24,
+            fg_color="#E74C3C", hover_color="#C0392B",
+            command=lambda: self.on_delete(self.index)
+        ).grid(row=0, column=16, padx=(5, 10))
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+
+    def _on_field_change(self) -> None:
+        if self._dirty and self.on_value_change:
+            self._dirty = False
+            self.on_value_change()
+
+    def get_schedule(self) -> dict:
+        try:
+            return {
+                "enabled": self.enabled_var.get(),
+                "start_hour": int(self.start_hour.get()),
+                "start_min": int(self.start_min.get()),
+                "end_hour": int(self.end_hour.get()),
+                "end_min": int(self.end_min.get()),
+                "min_temp": float(self.min_temp.get()),
+                "max_temp": float(self.max_temp.get()),
+            }
+        except ValueError:
+            return None
+
+    def set_schedule(self, slot: HeatpumpScheduleSlot) -> None:
+        self.start_hour.delete(0, "end")
+        self.start_hour.insert(0, str(slot.start_hour).zfill(2))
+        self.start_min.delete(0, "end")
+        self.start_min.insert(0, str(slot.start_min).zfill(2))
+        self.end_hour.delete(0, "end")
+        self.end_hour.insert(0, str(slot.end_hour).zfill(2))
+        self.end_min.delete(0, "end")
+        self.end_min.insert(0, str(slot.end_min).zfill(2))
+        self.min_temp.delete(0, "end")
+        self.min_temp.insert(0, str(slot.min_temp))
+        self.max_temp.delete(0, "end")
+        self.max_temp.insert(0, str(slot.max_temp))
+
+
+class HeatpumpPanel(ctk.CTkFrame):
+    """
+    Panel for Tuya heat pump control with temperature-based scheduling.
+
+    Features:
+    - Time-interval temperature schedules (min/max °C per slot)
+    - Solar override: keep running when excess solar available
+    - Live temperature and state display
+    """
+
+    def __init__(self, parent, on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10,
+                         border_width=1, border_color="#333333", **kwargs)
+        self.on_settings_change = on_settings_change
+        self.schedule_rows: List[HeatpumpScheduleRow] = []
+        self.grid_columnconfigure(0, weight=1)
+
+        # ── Header ──────────────────────────────────────────────────
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            header, text="\U0001F525 HEAT PUMP - Socket Thermostat (Tuya)",
+            font=("Roboto", 14, "bold"), text_color="#E67E22"
+        ).grid(row=0, column=0, sticky="w")
+
+        self.enabled_var = ctk.BooleanVar(value=heatpump_config.enabled)
+        self.enable_switch = ctk.CTkSwitch(
+            header, text="Enable", variable=self.enabled_var,
+            font=("Roboto", 11, "bold"), command=self._on_enable_toggle
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        if heatpump_config.enabled:
+            self.enable_switch.select()
+
+        _startup = heatpump_config.enabled
+        self.lbl_status = ctk.CTkLabel(
+            header,
+            text="Active" if _startup else "Disabled",
+            font=("Roboto", 11),
+            text_color="#2ECC71" if _startup else "gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+
+        # ── Settings row: solar override ────────────────────────────
+        sf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        sf.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+
+        self.solar_override_var = ctk.BooleanVar(value=heatpump_config.solar_override_enabled)
+        self.solar_switch = ctk.CTkSwitch(
+            sf, text="Solar Override",
+            variable=self.solar_override_var,
+            font=("Roboto", 10, "bold"),
+        )
+        self.solar_switch.grid(row=0, column=0, padx=10, pady=8, sticky="w")
+        if heatpump_config.solar_override_enabled:
+            self.solar_switch.select()
+
+        ctk.CTkLabel(sf, text="Trigger:", font=("Roboto", 10, "bold"),
+                      text_color="#F39C12").grid(row=0, column=1, padx=(15, 2), pady=8, sticky="e")
+        self.solar_export_min = ctk.CTkEntry(sf, width=60, justify="center")
+        self.solar_export_min.grid(row=0, column=2, padx=2, pady=8, sticky="w")
+        self.solar_export_min.insert(0, str(heatpump_config.solar_override_export_min))
+        ctk.CTkLabel(sf, text="W export", font=("Roboto", 10)).grid(row=0, column=3, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="HP Power:", font=("Roboto", 10, "bold"),
+                      text_color="#E74C3C").grid(row=0, column=4, padx=(10, 2), pady=8, sticky="e")
+        self.solar_hp_power = ctk.CTkEntry(sf, width=60, justify="center")
+        self.solar_hp_power.grid(row=0, column=5, padx=2, pady=8, sticky="w")
+        self.solar_hp_power.insert(0, str(heatpump_config.solar_override_hp_power))
+        ctk.CTkLabel(sf, text="W", font=("Roboto", 10)).grid(row=0, column=6, padx=(0, 8), pady=8)
+
+        ctk.CTkLabel(sf, text="OFF Delay:", font=("Roboto", 10, "bold"),
+                      text_color="#95A5A6").grid(row=0, column=7, padx=(8, 2), pady=8, sticky="e")
+        self.solar_off_delay = ctk.CTkEntry(sf, width=45, justify="center")
+        self.solar_off_delay.grid(row=0, column=8, padx=2, pady=8, sticky="w")
+        self.solar_off_delay.insert(0, str(heatpump_config.solar_override_off_delay))
+        ctk.CTkLabel(sf, text="s", font=("Roboto", 10)).grid(row=0, column=9, padx=(0, 10), pady=8)
+
+        # ── Settings row: SOC & Voltage overrides ───────────────────
+        vf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        vf.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
+
+        ctk.CTkLabel(vf, text="SOC ON:", font=("Roboto", 10, "bold"),
+                      text_color="#2ECC71").grid(row=0, column=0, padx=(10, 2), pady=8, sticky="e")
+        self.soc_on_entry = ctk.CTkEntry(vf, width=45, justify="center")
+        self.soc_on_entry.grid(row=0, column=1, padx=2, pady=8, sticky="w")
+        self.soc_on_entry.insert(0, str(heatpump_config.soc_on_threshold))
+        ctk.CTkLabel(vf, text="%", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 8), pady=8)
+
+        ctk.CTkLabel(vf, text="SOC OFF:", font=("Roboto", 10, "bold"),
+                      text_color="#E74C3C").grid(row=0, column=3, padx=(8, 2), pady=8, sticky="e")
+        self.soc_off_entry = ctk.CTkEntry(vf, width=45, justify="center")
+        self.soc_off_entry.grid(row=0, column=4, padx=2, pady=8, sticky="w")
+        self.soc_off_entry.insert(0, str(heatpump_config.soc_off_threshold))
+        ctk.CTkLabel(vf, text="%", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 8), pady=8)
+
+        ctk.CTkLabel(vf, text="HV ON:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=0, column=6, padx=(8, 2), pady=8, sticky="e")
+        self.hv_entry = ctk.CTkEntry(vf, width=50, justify="center")
+        self.hv_entry.grid(row=0, column=7, padx=2, pady=8, sticky="w")
+        self.hv_entry.insert(0, str(heatpump_config.hv_threshold))
+        ctk.CTkLabel(vf, text="V", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 4), pady=8)
+
+        ctk.CTkLabel(vf, text="HV OFF:", font=("Roboto", 10, "bold"),
+                      text_color="#3498DB").grid(row=0, column=9, padx=(4, 2), pady=8, sticky="e")
+        self.hv_off_entry = ctk.CTkEntry(vf, width=50, justify="center")
+        self.hv_off_entry.grid(row=0, column=10, padx=2, pady=8, sticky="w")
+        self.hv_off_entry.insert(0, str(heatpump_config.hv_off_threshold))
+        ctk.CTkLabel(vf, text="V", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 8), pady=8)
+
+        ctk.CTkLabel(vf, text="LV OFF:", font=("Roboto", 10, "bold"),
+                      text_color="#E67E22").grid(row=0, column=12, padx=(8, 2), pady=8, sticky="e")
+        self.lv_entry = ctk.CTkEntry(vf, width=50, justify="center")
+        self.lv_entry.grid(row=0, column=13, padx=2, pady=8, sticky="w")
+        self.lv_entry.insert(0, str(heatpump_config.lv_threshold))
+        ctk.CTkLabel(vf, text="V", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 4), pady=8)
+
+        ctk.CTkLabel(vf, text="Delay:", font=("Roboto", 10, "bold"),
+                      text_color="#E67E22").grid(row=0, column=15, padx=(4, 2), pady=8, sticky="e")
+        self.phase_delay_entry = ctk.CTkEntry(vf, width=40, justify="center")
+        self.phase_delay_entry.grid(row=0, column=16, padx=2, pady=8, sticky="w")
+        self.phase_delay_entry.insert(0, str(heatpump_config.phase_change_delay))
+        ctk.CTkLabel(vf, text="s", font=("Roboto", 10)).grid(row=0, column=17, padx=(0, 4), pady=8)
+
+        ctk.CTkLabel(vf, text="LV Recovery:", font=("Roboto", 10, "bold"),
+                      text_color="#E67E22").grid(row=0, column=18, padx=(4, 2), pady=8, sticky="e")
+        self.lv_recovery_entry = ctk.CTkEntry(vf, width=50, justify="center")
+        self.lv_recovery_entry.grid(row=0, column=19, padx=2, pady=8, sticky="w")
+        self.lv_recovery_entry.insert(0, str(heatpump_config.lv_recovery_voltage))
+        ctk.CTkLabel(vf, text="V", font=("Roboto", 10)).grid(row=0, column=20, padx=(0, 4), pady=8)
+
+        ctk.CTkLabel(vf, text="Recovery Delay:", font=("Roboto", 10, "bold"),
+                      text_color="#E67E22").grid(row=0, column=21, padx=(4, 2), pady=8, sticky="e")
+        self.lv_recovery_delay_entry = ctk.CTkEntry(vf, width=50, justify="center")
+        self.lv_recovery_delay_entry.grid(row=0, column=22, padx=2, pady=8, sticky="w")
+        self.lv_recovery_delay_entry.insert(0, str(heatpump_config.lv_recovery_delay))
+        ctk.CTkLabel(vf, text="s", font=("Roboto", 10)).grid(row=0, column=23, padx=(0, 10), pady=8)
+
+        # ── Schedule header + Add button ────────────────────────────
+        sched_header = ctk.CTkFrame(self, fg_color="transparent")
+        sched_header.grid(row=3, column=0, sticky="ew", padx=10, pady=(5, 2))
+        sched_header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            sched_header, text="Temperature Schedules:",
+            font=("Roboto", 11, "bold"), text_color="#E67E22"
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(
+            sched_header, text="+ Add Time Slot", width=120, height=28,
+            fg_color="#27AE60", hover_color="#1E8449",
+            command=self._add_row
+        ).grid(row=0, column=1, sticky="e")
+
+        # ── Container for schedule rows ─────────────────────────────
+        self.rows_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.rows_container.grid(row=4, column=0, sticky="ew", padx=10, pady=5)
+        self.rows_container.grid_columnconfigure(0, weight=1)
+
+        self.lbl_info = ctk.CTkLabel(
+            self, text="Add time slots with min/max temperature targets for the heat pump.",
+            font=("Roboto", 10), text_color="#888888"
+        )
+        self.lbl_info.grid(row=5, column=0, pady=(2, 5))
+
+        # ── Live state display ──────────────────────────────────────
+        state_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        state_frame.grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 10))
+        state_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.lbl_hp_status = ctk.CTkLabel(
+            state_frame, text="Outlet: --",
+            font=("Roboto", 11, "bold"), text_color="#888888"
+        )
+        self.lbl_hp_status.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        self.lbl_hp_temp = ctk.CTkLabel(
+            state_frame, text="Temp: --°C",
+            font=("Roboto", 11, "bold"), text_color="#888888"
+        )
+        self.lbl_hp_temp.grid(row=0, column=1, padx=10, pady=5)
+
+        self.lbl_hp_result = ctk.CTkLabel(
+            state_frame, text="--",
+            font=("Roboto", 11, "bold"), text_color="gray"
+        )
+        self.lbl_hp_result.grid(row=0, column=2, padx=10, pady=5, sticky="e")
+
+        # Load default schedules from .env
+        for slot in heatpump_schedules:
+            self._add_row()
+            self.schedule_rows[-1].set_schedule(slot)
+
+    # ── Callbacks ────────────────────────────────────────────────────
+
+    def _on_enable_toggle(self) -> None:
+        enabled = self.enabled_var.get()
+        self.lbl_status.configure(
+            text="Active" if enabled else "Disabled",
+            text_color="#2ECC71" if enabled else "gray"
+        )
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    def _add_row(self) -> None:
+        index = len(self.schedule_rows)
+        row = HeatpumpScheduleRow(self.rows_container, index, self._delete_row,
+                                  on_value_change=self._on_row_value_change)
+        row.grid(row=index, column=0, sticky="ew", pady=3)
+        self.schedule_rows.append(row)
+        if self.schedule_rows:
+            self.lbl_info.grid_forget()
+
+    def _delete_row(self, index: int) -> None:
+        if 0 <= index < len(self.schedule_rows):
+            self.schedule_rows[index].destroy()
+            self.schedule_rows.pop(index)
+            for i, row in enumerate(self.schedule_rows):
+                row.index = i
+                row.grid(row=i, column=0, sticky="ew", pady=3)
+        if not self.schedule_rows:
+            self.lbl_info.grid(row=5, column=0, pady=(2, 5))
+
+    def _on_row_value_change(self) -> None:
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    # ── Public API ───────────────────────────────────────────────────
+
+    def is_enabled(self) -> bool:
+        return self.enabled_var.get()
+
+    def get_settings(self) -> dict:
+        """Return current settings."""
+        schedules = []
+        for row in self.schedule_rows:
+            data = row.get_schedule()
+            if data and data["enabled"]:
+                schedules.append(HeatpumpScheduleSlot(
+                    start_hour=data["start_hour"],
+                    start_min=data["start_min"],
+                    end_hour=data["end_hour"],
+                    end_min=data["end_min"],
+                    min_temp=data["min_temp"],
+                    max_temp=data["max_temp"],
+                ))
+        try:
+            return {
+                "enabled": self.enabled_var.get(),
+                "schedules": schedules,
+                "solar_override_enabled": self.solar_override_var.get(),
+                "solar_override_export_min": int(self.solar_export_min.get()),
+                "solar_override_hp_power": int(self.solar_hp_power.get()),
+                "solar_override_off_delay": int(self.solar_off_delay.get()),
+                "soc_on_threshold": int(self.soc_on_entry.get()),
+                "soc_off_threshold": int(self.soc_off_entry.get()),
+                "hv_threshold": float(self.hv_entry.get()),
+                "hv_off_threshold": float(self.hv_off_entry.get()),
+                "lv_threshold": float(self.lv_entry.get()),
+                "lv_recovery_voltage": float(self.lv_recovery_entry.get()),
+                "lv_recovery_delay": int(self.lv_recovery_delay_entry.get()),
+                "phase_change_delay": int(self.phase_delay_entry.get()),
+            }
+        except (ValueError, TypeError):
+            return {
+                "enabled": False,
+                "schedules": schedules,
+                "solar_override_enabled": heatpump_config.solar_override_enabled,
+                "solar_override_export_min": heatpump_config.solar_override_export_min,
+                "solar_override_hp_power": heatpump_config.solar_override_hp_power,
+                "solar_override_off_delay": heatpump_config.solar_override_off_delay,
+                "soc_on_threshold": heatpump_config.soc_on_threshold,
+                "soc_off_threshold": heatpump_config.soc_off_threshold,
+                "hv_threshold": heatpump_config.hv_threshold,
+                "hv_off_threshold": heatpump_config.hv_off_threshold,
+                "lv_threshold": heatpump_config.lv_threshold,
+                "lv_recovery_voltage": heatpump_config.lv_recovery_voltage,
+                "lv_recovery_delay": heatpump_config.lv_recovery_delay,
+                "phase_change_delay": heatpump_config.phase_change_delay,
+            }
+
+    def update_hp_state(self, connected: bool, is_on: bool, temperature: float,
+                        target_temp: float, result_text: str, detail: str) -> None:
+        """Update the live state display labels."""
+        # Device connection + target status
+        if not connected:
+            self.lbl_hp_status.configure(text="Outlet: Offline", text_color="#E74C3C")
+        elif target_temp is not None:
+            self.lbl_hp_status.configure(text=f"Target: {target_temp:.0f}°C", text_color="#2ECC71" if is_on else "#F39C12")
+        else:
+            self.lbl_hp_status.configure(text="Target: --°C", text_color="#888888")
+
+        # Temperature + target
+        if temperature is not None:
+            temp_color = "#E74C3C" if temperature > 50 else "#F39C12" if temperature > 40 else "#2ECC71"
+            target_str = f" → {target_temp:.0f}°C" if target_temp is not None else ""
+            self.lbl_hp_temp.configure(text=f"Temp: {temperature:.1f}°C{target_str}", text_color=temp_color)
+        else:
+            self.lbl_hp_temp.configure(text="Temp: --°C", text_color="#888888")
+
+        # Logic result
+        full = f"{result_text}: {detail}" if detail else result_text
+        color_map = {
+            "HP: Schedule Active": "#2ECC71",
+            "HP: Solar Override": "#1ABC9C",
+            "HP: SOC Override": "#2ECC71",
+            "HP: HV Override": "#00FFFF",
+            "HP: LV Shutdown": "#E74C3C",
+            "HP: SOC Low": "#E74C3C",
+            "HP: No Active Schedule": "#F39C12",
+            "HP: Standby": "#888888",
+            "HP: No Temperature": "#95A5A6",
+            "HP Offline": "#E74C3C",
+            "HP Disabled": "gray",
+        }
+        self.lbl_hp_result.configure(text=full, text_color=color_map.get(result_text, "#888888"))
 
 
 class BatteryStatsDialog(ctk.CTkToplevel):

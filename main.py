@@ -11,12 +11,14 @@ import os
 from datetime import datetime
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, get_app_path
+from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, get_app_path
 from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
 from src.tuya_charger import TuyaChargerManager
 from src.ev_logic import EVChargingLogic, EVSettings, EVResult
+from src.tuya_heatpump import TuyaHeatpumpManager
+from src.tuya_heatpump_logic import HeatpumpLogic, HeatpumpSettings, HeatpumpResult
 from src.ui_components import (
     PhaseDisplay,
     SettingsPanel,
@@ -29,6 +31,7 @@ from src.ui_components import (
     OverpowerProtectionPanel,
     SunsetChargingPanel,
     EVChargerPanel,
+    HeatpumpPanel,
     BatteryStatsDialog,
 )
 
@@ -94,6 +97,13 @@ class DeyeApp(ctk.CTk):
         self.tapo = TapoManager(error_callback=self._log_error)
         self.ems = EMSLogic(self.tapo)
         
+        # Tuya heat pump outlet
+        self.hp_manager = None
+        self.hp_logic = None
+        if heatpump_config.device_id:
+            self.hp_manager = TuyaHeatpumpManager(heatpump_config, error_callback=self._log_error)
+            self.hp_logic = HeatpumpLogic(self.hp_manager, heatpump_config)
+
         # EV charger (Tuya)
         self.ev_charger = None
         self.ev_logic = None
@@ -150,7 +160,7 @@ class DeyeApp(ctk.CTk):
                 "power": ctk.StringVar(value=str(outlet.config.power)),
                 "hv_threshold": ctk.StringVar(value=str(outlet.config.hv_threshold)),
                 "lv_threshold": ctk.StringVar(value=str(outlet.config.lv_threshold)),
-                "lv_delay": ctk.StringVar(value=str(outlet.config.lv_delay)),
+                "phase_change_delay": ctk.StringVar(value=str(outlet.config.phase_change_delay)),
                 "lv_recovery_voltage": ctk.StringVar(value=str(outlet.config.lv_recovery_voltage)),
                 "lv_recovery_delay": ctk.StringVar(value=str(outlet.config.lv_recovery_delay)),
                 "headroom": ctk.StringVar(value=str(outlet.config.headroom)),
@@ -241,12 +251,19 @@ class DeyeApp(ctk.CTk):
         )
         self.sunset_panel.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
+        # Tuya Heat Pump Panel
+        self.heatpump_panel = HeatpumpPanel(
+            self.scrollable,
+            on_settings_change=self._on_heatpump_change
+        )
+        self.heatpump_panel.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+
         # EV Charger Panel
         self.ev_panel = EVChargerPanel(
             self.scrollable,
             on_settings_change=self._on_ev_change
         )
-        self.ev_panel.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        self.ev_panel.grid(row=10, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
         # Track last applied schedule to avoid redundant writes
         self._last_applied_schedule = None
@@ -265,14 +282,14 @@ class DeyeApp(ctk.CTk):
             self.cfg,
             on_manual_toggle=self._on_manual_toggle
         )
-        self.settings.grid(row=10, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+        self.settings.grid(row=11, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 12
+        current_row = 13
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -583,6 +600,11 @@ class DeyeApp(ctk.CTk):
                 self._last_applied_schedule = None
                 print("[SUNSET] Disabled - clearing boost")
 
+    def _on_heatpump_change(self) -> None:
+        """Handle heat pump panel settings change."""
+        if not self.heatpump_panel.is_enabled():
+            print("[HP] Disabled via UI")
+
     def _on_ev_change(self) -> None:
         """Handle EV charger panel settings change."""
         if not self.ev_panel.is_enabled():
@@ -765,12 +787,12 @@ class DeyeApp(ctk.CTk):
         if self._current_max_charge is None or battery_voltage <= 0:
             return True  # No prior setting or no voltage reading — allow adjustment
         
-        # Only check when battery is actually charging (positive power = charging)
-        if data.battery_power <= 0:
-            return True  # Not charging (discharging or idle) — allow adjustment
+        # Only check when battery is actually charging (negative power = charging for Deye)
+        if data.battery_power >= 0:
+            return True  # Discharging or idle — allow adjustment
         
         expected_power = self._current_max_charge * battery_voltage
-        actual_power = data.battery_power
+        actual_power = abs(data.battery_power)
         
         # Check if actual power is within 10% of expected
         if abs(actual_power - expected_power) > expected_power * 0.10:
@@ -1040,6 +1062,8 @@ class DeyeApp(ctk.CTk):
                     self._process_overpower_protection(data)
                     # Process sunset charging (may further boost if needed to reach target by sunset)
                     self._process_sunset_charging(data)
+                    # Process Tuya heat pump logic
+                    self._process_heatpump(data)
                     # Process EV charger logic
                     self._process_ev_charging(data)
                 else:
@@ -1126,7 +1150,7 @@ class DeyeApp(ctk.CTk):
                 outlet.config.power = int(self._get_safe_value(cfg_vars["power"], outlet.config.power))
                 outlet.config.hv_threshold = float(self._get_safe_value(cfg_vars["hv_threshold"], outlet.config.hv_threshold))
                 outlet.config.lv_threshold = float(self._get_safe_value(cfg_vars["lv_threshold"], outlet.config.lv_threshold))
-                outlet.config.lv_delay = int(self._get_safe_value(cfg_vars["lv_delay"], outlet.config.lv_delay))
+                outlet.config.phase_change_delay = int(self._get_safe_value(cfg_vars["phase_change_delay"], outlet.config.phase_change_delay))
                 outlet.config.lv_recovery_voltage = float(self._get_safe_value(cfg_vars["lv_recovery_voltage"], outlet.config.lv_recovery_voltage))
                 outlet.config.lv_recovery_delay = int(self._get_safe_value(cfg_vars["lv_recovery_delay"], outlet.config.lv_recovery_delay))
                 outlet.config.headroom = int(self._get_safe_value(cfg_vars["headroom"], outlet.config.headroom))
@@ -1170,9 +1194,57 @@ class DeyeApp(ctk.CTk):
         for outlet_panel in self.outlet_settings.values():
             self.after(0, lambda p=outlet_panel: p.set_invalid_config(is_invalid))
 
+    def _process_heatpump(self, data: InverterData) -> None:
+        """Process Tuya heat pump logic (called from background thread)."""
+        if self.hp_logic is None:
+            return
+
+        ui_settings = self.heatpump_panel.get_settings()
+
+        settings = HeatpumpSettings(
+            enabled=ui_settings["enabled"],
+            schedules=ui_settings["schedules"],
+            solar_override_enabled=ui_settings["solar_override_enabled"],
+            solar_override_export_min=ui_settings["solar_override_export_min"],
+            solar_override_hp_power=ui_settings["solar_override_hp_power"],
+            solar_override_off_delay=ui_settings["solar_override_off_delay"],
+            soc_on_threshold=ui_settings["soc_on_threshold"],
+            soc_off_threshold=ui_settings["soc_off_threshold"],
+            hv_threshold=ui_settings["hv_threshold"],
+            hv_off_threshold=ui_settings["hv_off_threshold"],
+            lv_threshold=ui_settings["lv_threshold"],
+            lv_recovery_voltage=ui_settings["lv_recovery_voltage"],
+            lv_recovery_delay=ui_settings["lv_recovery_delay"],
+            phase_change_delay=ui_settings["phase_change_delay"],
+        )
+
+        result, detail = self.hp_logic.process(settings, data.grid_power, data.soc, data.voltages)
+        hp_state = self.hp_manager.get_state()
+
+        # Log on state changes
+        hp_key = (result, detail)
+        if hp_key != getattr(self, "_last_hp_key", None):
+            self._last_hp_key = hp_key
+            if result in (HeatpumpResult.SCHEDULE_ACTIVE, HeatpumpResult.SOLAR_OVERRIDE,
+                          HeatpumpResult.SOC_OVERRIDE, HeatpumpResult.HV_OVERRIDE,
+                          HeatpumpResult.LV_SHUTDOWN, HeatpumpResult.SOC_LOW,
+                          HeatpumpResult.NO_SCHEDULE, HeatpumpResult.OFFLINE):
+                self._log_error(f"HP: {result.value} ({detail})")
+
+        self.after(0, lambda: self.heatpump_panel.update_hp_state(
+            connected=hp_state.is_connected,
+            is_on=hp_state.is_on,
+            temperature=hp_state.temperature,
+            target_temp=hp_state.target_temp,
+            result_text=result.value,
+            detail=detail,
+        ))
+
     def destroy(self) -> None:
         """Clean up resources on window close."""
         self._running = False
+        if self.hp_manager:
+            self.hp_manager.stop()
         if self.ev_charger:
             self.ev_charger.stop()
         self.inverter.disconnect()

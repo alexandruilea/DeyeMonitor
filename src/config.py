@@ -66,7 +66,7 @@ class OutletConfig:
     stop_soc: int = 32
     hv_threshold: float = 252.0
     lv_threshold: float = 210.0
-    lv_delay: int = 10
+    phase_change_delay: int = 10
     lv_recovery_voltage: float = 220.0  # Voltage must exceed this for recovery
     lv_recovery_delay: int = 300  # Seconds voltage must stay above recovery level (default 5 min)
     headroom: int = 4000
@@ -109,7 +109,7 @@ def load_outlet_configs() -> List[OutletConfig]:
         stop_soc = int(os.getenv(f"{prefix}STOP_SOC", "32"))
         hv_threshold = float(os.getenv(f"{prefix}HV_THRESHOLD", "252.0"))
         lv_threshold = float(os.getenv(f"{prefix}LV_THRESHOLD", "210.0"))
-        lv_delay = int(os.getenv(f"{prefix}LV_DELAY", "10"))
+        phase_change_delay = int(os.getenv(f"{prefix}PHASE_CHANGE_DELAY", os.getenv(f"{prefix}LV_DELAY", "10")))
         lv_recovery_voltage = float(os.getenv(f"{prefix}LV_RECOVERY_VOLTAGE", "220.0"))
         lv_recovery_delay = int(os.getenv(f"{prefix}LV_RECOVERY_DELAY", "300"))
         headroom = int(os.getenv(f"{prefix}HEADROOM", "4000"))
@@ -139,7 +139,7 @@ def load_outlet_configs() -> List[OutletConfig]:
             stop_soc=stop_soc,
             hv_threshold=hv_threshold,
             lv_threshold=lv_threshold,
-            lv_delay=lv_delay,
+            phase_change_delay=phase_change_delay,
             lv_recovery_voltage=lv_recovery_voltage,
             lv_recovery_delay=lv_recovery_delay,
             headroom=headroom,
@@ -211,6 +211,82 @@ class EVChargerConfig:
 
 
 @dataclass
+class HeatpumpScheduleSlot:
+    """A single time-based temperature schedule slot for the heat pump."""
+    start_hour: int = 0
+    start_min: int = 0
+    end_hour: int = 23
+    end_min: int = 59
+    min_temp: float = 28.0
+    max_temp: float = 35.0
+
+
+@dataclass
+class TuyaHeatpumpConfig:
+    """Configuration for a Tuya-based smart outlet controlling a heat pump with temperature sensor."""
+    enabled: bool = field(default_factory=lambda: os.getenv("HEATPUMP_ENABLED", "false").lower() == "true")
+    device_id: str = field(default_factory=lambda: os.getenv("HEATPUMP_DEVICE_ID", ""))
+    ip: str = field(default_factory=lambda: os.getenv("HEATPUMP_IP", ""))
+    local_key: str = field(default_factory=lambda: os.getenv("HEATPUMP_LOCAL_KEY", ""))
+    protocol_version: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_PROTOCOL_VERSION", "3.3")))
+    name: str = field(default_factory=lambda: os.getenv("HEATPUMP_NAME", "Heat Pump"))
+    # Tuya DPS mapping
+    dp_switch: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_DP_SWITCH", "2")))
+    dp_temperature: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_DP_TEMPERATURE", "6")))
+    dp_temp_set: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_DP_TEMP_SET", "17")))
+    dp_hysteresis: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_DP_HYSTERESIS", "111")))
+    dp_mode: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_DP_MODE", "4")))
+    dp_temp_scale: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_DP_TEMP_SCALE", "10")))  # 1=°C, 10=°C×10
+    standby_target: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_STANDBY_TARGET", "-30")))  # Target when OFF
+    solar_override_target: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_SOLAR_OVERRIDE_TARGET", "90")))  # Target when forcing ON
+    # Solar override: keep running when excess solar regardless of temperature
+    solar_override_enabled: bool = field(default_factory=lambda: os.getenv("HEATPUMP_SOLAR_OVERRIDE", "true").lower() == "true")
+    solar_override_export_min: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN", "1000")))  # Min export watts to trigger ON
+    solar_override_hp_power: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_HP_POWER", "3000")))  # Approx heat pump consumption (W)
+    solar_override_off_delay: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_OFF_DELAY", "60")))  # Seconds before solar override deactivates
+    # SOC-based override: turn ON when battery is full
+    soc_on_threshold: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOC_ON_THRESHOLD", "90")))  # SOC >= this → force ON
+    soc_off_threshold: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOC_OFF_THRESHOLD", "30")))  # SOC <= this → force OFF
+    # Voltage-based overrides
+    hv_threshold: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_HV_THRESHOLD", "252.0")))  # High-voltage dump ON
+    hv_off_threshold: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_HV_OFF_THRESHOLD", "245.0")))  # HV hysteresis OFF
+    lv_threshold: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_LV_THRESHOLD", "210.0")))  # Low-voltage shutdown
+    lv_recovery_voltage: float = field(default_factory=lambda: float(os.getenv("HEATPUMP_LV_RECOVERY_VOLTAGE", "220.0")))  # Voltage must exceed this for recovery
+    lv_recovery_delay: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_LV_RECOVERY_DELAY", "300")))  # Seconds voltage must stay above recovery level
+    phase_change_delay: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_PHASE_CHANGE_DELAY", "10")))  # Seconds before voltage triggers activate
+    target_phase: str = field(default_factory=lambda: os.getenv("HEATPUMP_TARGET_PHASE", "ANY"))  # Phase to monitor voltage (L1/L2/L3/ANY)
+
+
+def load_heatpump_schedules() -> list:
+    """Load default heat pump temperature schedule slots from environment variables.
+
+    Format: HEATPUMP_SCHEDULE_N=HH:MM-HH:MM,min_temp,max_temp
+    Example: HEATPUMP_SCHEDULE_1=16:00-18:00,40,45
+    """
+    schedules = []
+    i = 1
+    while True:
+        raw = os.getenv(f"HEATPUMP_SCHEDULE_{i}")
+        if not raw:
+            break
+        try:
+            parts = raw.split(",")
+            time_range, min_temp, max_temp = parts
+            start_str, end_str = time_range.split("-")
+            sh, sm = start_str.split(":")
+            eh, em = end_str.split(":")
+            schedules.append(HeatpumpScheduleSlot(
+                start_hour=int(sh), start_min=int(sm),
+                end_hour=int(eh), end_min=int(em),
+                min_temp=float(min_temp), max_temp=float(max_temp),
+            ))
+        except (ValueError, IndexError):
+            print(f"[CONFIG] Warning: Could not parse HEATPUMP_SCHEDULE_{i}={raw}")
+        i += 1
+    return schedules
+
+
+@dataclass
 class SunsetChargingConfig:
     """Configuration for sunset-aware charging."""
     latitude: float = field(default_factory=lambda: float(os.getenv("SOLAR_LATITUDE", "47.00")))
@@ -262,4 +338,6 @@ ems_defaults = EMSDefaults()
 protection_config = OverpowerProtectionConfig()
 sunset_config = SunsetChargingConfig()
 ev_charger_config = EVChargerConfig()
+heatpump_config = TuyaHeatpumpConfig()
+heatpump_schedules = load_heatpump_schedules()
 default_schedules = load_default_schedules()

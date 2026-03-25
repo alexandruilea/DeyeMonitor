@@ -45,7 +45,7 @@ class BMSData:
 class InverterData:
     """Data structure for inverter readings."""
     soc: int  # State of charge (%)
-    battery_power: int  # Battery power (W) - positive = charging, negative = discharging
+    battery_power: int  # Battery power (W) - positive = discharging, negative = charging
     pv_power: int  # Solar PV power (W)
     grid_power: int  # Grid power (W) - positive = importing, negative = exporting
     voltages: List[float]  # Phase voltages [L1, L2, L3]

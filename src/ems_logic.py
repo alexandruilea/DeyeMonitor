@@ -390,12 +390,12 @@ class EMSLogic:
             # Check undervoltage timer
             if outlet.config.voltage_enabled and lv_voltage < outlet.config.lv_threshold:
                 self.state.start_lv_timer(outlet.config.outlet_id)
-                if self.state.lv_timer_elapsed(outlet.config.outlet_id, outlet.config.lv_delay):
+                if self.state.lv_timer_elapsed(outlet.config.outlet_id, outlet.config.phase_change_delay):
                     self.tapo.turn_off(outlet.config.outlet_id)
                     self.state.reset_runtime(outlet.config.outlet_id)
                     self.state.mark_lv_shutdown(outlet.config.outlet_id)  # Mark as LV shutdown
                     return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: {lv_voltage}V < {outlet.config.lv_threshold}V"
-                remaining = outlet.config.lv_delay - (time.time() - self.state.lv_timers[outlet.config.outlet_id])
+                remaining = outlet.config.phase_change_delay - (time.time() - self.state.lv_timers[outlet.config.outlet_id])
                 return LogicResult.OFF_UNDERVOLTAGE, f"{outlet.config.name}: Timer {remaining:.0f}s"
             else:
                 self.state.reset_lv_timer(outlet.config.outlet_id)
@@ -535,11 +535,11 @@ class EMSLogic:
                 if soc_too_low:
                     self.state.reset_hv_delay(outlet.config.outlet_id)
                     return LogicResult.BLOCKED_BATTERY_LOW, f"{outlet.config.name}: HV {hv_voltage}V but SOC {data.soc}% <= {outlet.config.stop_soc}% min"
-                # HV delay: reuse lv_delay value to require sustained high voltage
-                if outlet.config.lv_delay > 0:
+                # HV delay: reuse phase_change_delay value to require sustained high voltage
+                if outlet.config.phase_change_delay > 0:
                     self.state.start_hv_delay(outlet.config.outlet_id)
-                    if not self.state.hv_delay_elapsed(outlet.config.outlet_id, outlet.config.lv_delay):
-                        remaining = self.state.get_hv_delay_remaining(outlet.config.outlet_id, outlet.config.lv_delay)
+                    if not self.state.hv_delay_elapsed(outlet.config.outlet_id, outlet.config.phase_change_delay):
+                        remaining = self.state.get_hv_delay_remaining(outlet.config.outlet_id, outlet.config.phase_change_delay)
                         mins, secs = divmod(int(remaining), 60)
                         return LogicResult.WAIT_HV_DELAY, f"{outlet.config.name}: HV {hv_voltage}V ({mins}m{secs:02d}s)"
                 print(f"[EMS] TURN ON '{outlet.config.name}' -> ON_HV_DUMP | HV={hv_voltage}V threshold={outlet.config.hv_threshold}V SOC={data.soc}% Grid={data.grid_power}W")
