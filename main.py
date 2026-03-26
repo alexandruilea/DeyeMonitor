@@ -126,6 +126,8 @@ class DeyeApp(ctk.CTk):
         self._sunset_boost_amps = 0  # Current sunset boost amount
         self._sunset_active = False  # Whether sunset charging is actively boosting
         self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
+        self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling window
+        self._cloud_boost_factor = 1.0  # Current cloudy day boost multiplier
         
         # Track if main loop has started (for safe error logging from threads)
         self._main_loop_started = False
@@ -597,6 +599,7 @@ class DeyeApp(ctk.CTk):
             if self._sunset_boost_amps > 0:
                 self._sunset_boost_amps = 0
                 self._sunset_active = False
+                self._cloud_boost_factor = 1.0
                 self._last_applied_schedule = None
                 print("[SUNSET] Disabled - clearing boost")
 
@@ -617,9 +620,14 @@ class DeyeApp(ctk.CTk):
         Process sunset-aware charging logic.
         
         Uses a solar-curve-weighted algorithm: charges more aggressively around
-        solar noon (when PV production peaks and electricity is cheap) and less
+        the configured peak solar hour (or solar noon if set to auto) and less
         in the early morning and late afternoon. The weighting follows a cosine
-        curve from sunrise to the deadline, peaking at solar noon.
+        curve from sunrise to the deadline, peaking at the configured hour.
+        
+        Cloudy day compensation: when peak_expected_kw is configured, compares
+        a 15-minute rolling average of actual PV production against the expected
+        cos² curve. If production is below the threshold, applies a boost
+        multiplier to charge faster and compensate for reduced solar.
         """
         from astral import LocationInfo
         from astral.sun import sun
@@ -631,11 +639,18 @@ class DeyeApp(ctk.CTk):
                 self._sunset_boost_amps = 0
                 self._sunset_active = False
                 self._last_applied_schedule = None
+                self._cloud_boost_factor = 1.0
             self.after(0, lambda: self.sunset_panel.update_state("--:--", None, 0, False))
             return
         
         # Throttle adjustments to avoid excessive inverter writes
         current_time = time.time()
+
+        # Track PV production samples (rolling 15-min window) for cloudy day detection
+        self._pv_samples.append((current_time, data.pv_power))
+        cutoff = current_time - 900  # 15 minutes
+        self._pv_samples = [(t, w) for t, w in self._pv_samples if t >= cutoff]
+
         if current_time - self._last_sunset_adjustment < deye_config.min_register_write_interval:
             return
         
@@ -671,14 +686,26 @@ class DeyeApp(ctk.CTk):
             if self._sunset_active:
                 self._sunset_boost_amps = 0
                 self._sunset_active = False
+                self._cloud_boost_factor = 1.0
                 self._last_applied_schedule = None
             self.after(0, lambda: self.sunset_panel.update_state(
                 sunset_str, hours_left if hours_left > 0 else 0, 0, False))
             return
         
         # Solar-curve-weighted charging calculation
-        # Weight = cos²(angle from noon) → peaks at solar noon, tapers to edges
+        # Weight = cos²(angle from peak) → peaks at configured hour (or solar noon), tapers to edges
         remaining_ah = capacity_ah * (target_soc - current_soc) / 100.0
+        
+        # Determine peak time: use configured peak_solar_hour or fall back to solar noon
+        peak_hour = settings.get("peak_solar_hour", 0.0)
+        if peak_hour > 0:
+            # Convert local decimal hour to UTC datetime for today
+            peak_h = int(peak_hour)
+            peak_m = int((peak_hour - peak_h) * 60)
+            peak_local = now.astimezone().replace(hour=peak_h, minute=peak_m, second=0, microsecond=0)
+            peak_utc = peak_local.astimezone(timezone.utc)
+        else:
+            peak_utc = noon_utc
         
         # Calculate solar day span for weighting (from sunrise to deadline)
         day_span = (deadline - sunrise_utc).total_seconds()
@@ -689,11 +716,11 @@ class DeyeApp(ctk.CTk):
         else:
             # Current position as fraction of solar day (0=sunrise, 1=deadline)
             now_frac = (now - sunrise_utc).total_seconds() / day_span
-            noon_frac = (noon_utc - sunrise_utc).total_seconds() / day_span
+            noon_frac = (peak_utc - sunrise_utc).total_seconds() / day_span
             now_frac = max(0.0, min(1.0, now_frac))
             
-            # Weight at current time: cos²(π × (t - noon_frac))
-            # Peaks at solar noon (weight=1.0), tapers to ~0 at edges
+            # Weight at current time: cos²(π × (t - peak_frac))
+            # Peaks at configured peak hour (or solar noon), tapers to ~0 at edges
             def solar_weight(t_frac):
                 angle = math.pi * (t_frac - noon_frac)
                 return max(0.05, math.cos(angle) ** 2)  # Floor of 0.05 to avoid zero
@@ -713,6 +740,33 @@ class DeyeApp(ctk.CTk):
                 required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
             else:
                 required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
+        
+        # Cloudy day compensation: compare rolling PV average to expected curve
+        peak_kw = settings.get("peak_expected_kw", 0.0)
+        cloud_threshold = settings.get("cloud_threshold_pct", 60) / 100.0
+        cloud_max_boost = settings.get("cloud_max_boost", 3.0)
+        
+        if peak_kw > 0 and day_span > 0 and len(self._pv_samples) >= 3:
+            # Expected production at current time from cos² curve (kW)
+            expected_kw = peak_kw * solar_weight(now_frac)
+            # Rolling average of actual PV production (kW)
+            avg_pv_kw = sum(w for _, w in self._pv_samples) / len(self._pv_samples) / 1000.0
+            
+            if expected_kw > 0.5:  # Only compensate when meaningful production is expected
+                production_ratio = avg_pv_kw / expected_kw
+                if production_ratio < cloud_threshold:
+                    # Scale boost inversely with production ratio
+                    # At 30% of expected → boost ~2x; at 10% → boost ~3x (capped)
+                    self._cloud_boost_factor = min(cloud_max_boost, expected_kw / max(avg_pv_kw, 0.1))
+                    required_amps = math.ceil(required_amps * self._cloud_boost_factor)
+                    print(f"[SUNSET] Cloudy boost: PV avg={avg_pv_kw:.1f}kW vs expected={expected_kw:.1f}kW"
+                          f" ({production_ratio:.0%}), boost={self._cloud_boost_factor:.1f}x → {required_amps}A")
+                else:
+                    self._cloud_boost_factor = 1.0
+            else:
+                self._cloud_boost_factor = 1.0
+        else:
+            self._cloud_boost_factor = 1.0
         
         required_amps = max(min_charge, min(required_amps, deye_config.max_charge_amps_limit))
         
@@ -734,7 +788,8 @@ class DeyeApp(ctk.CTk):
                 # Verify inverter has caught up before changing charge speed
                 if not self._is_charge_speed_settled(data, data.battery_voltage if data.battery_voltage > 0 else 52):
                     self.after(0, lambda: self.sunset_panel.update_state(
-                        sunset_str, hours_left, required_amps, self._sunset_active))
+                        sunset_str, hours_left, required_amps, self._sunset_active,
+                        self._cloud_boost_factor))
                     return
                 
                 self._sunset_boost_amps = sunset_boost
@@ -743,10 +798,11 @@ class DeyeApp(ctk.CTk):
                 target_charge = base_charge + self._protection_boost_amps + self._sunset_boost_amps
                 target_charge = min(target_charge, deye_config.max_charge_amps_limit)
                 
+                peak_info = f"peak={peak_hour:.1f}h" if peak_hour > 0 else "peak=auto"
                 print(f"[SUNSET] Boosting: Base={base_charge}A + Protection={self._protection_boost_amps}A"
                       f" + Sunset={self._sunset_boost_amps}A = {target_charge}A"
                       f" (need {remaining_ah:.0f}Ah in {hours_left:.1f}h, weight={current_weight:.2f},"
-                      f" SOC {current_soc}%→{target_soc}%)")
+                      f" {peak_info}, SOC {current_soc}%→{target_soc}%)")
                 
                 if self.inverter.set_max_charge_current(target_charge):
                     self._current_max_charge = target_charge
@@ -763,7 +819,8 @@ class DeyeApp(ctk.CTk):
                 print(f"[SUNSET] Base charge ({effective_charge}A) sufficient for {required_amps}A required")
         
         self.after(0, lambda: self.sunset_panel.update_state(
-            sunset_str, hours_left, required_amps, self._sunset_active))
+            sunset_str, hours_left, required_amps, self._sunset_active,
+            self._cloud_boost_factor))
 
     def _get_base_charge_amps(self) -> int:
         """Get the base charge amps from schedule or defaults (before protection boost)."""

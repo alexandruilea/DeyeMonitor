@@ -1304,13 +1304,44 @@ class SunsetChargingPanel(ctk.CTkFrame):
         self.buffer_minutes.insert(0, str(sunset_config.buffer_minutes))
         ctk.CTkLabel(settings_frame, text="min", font=("Roboto", 10)).grid(row=0, column=12, padx=(0, 10), pady=8)
         
-        # Second row: Min charge amps
+        # Second row: Min charge amps + Peak solar hour
         ctk.CTkLabel(settings_frame, text="Min Charge:", font=("Roboto", 10),
                       text_color="#2ECC71").grid(row=1, column=0, padx=(10, 2), pady=8, sticky="w")
         self.min_charge = ctk.CTkEntry(settings_frame, width=45, justify="center")
         self.min_charge.grid(row=1, column=1, padx=2, pady=8)
         self.min_charge.insert(0, str(sunset_config.min_charge_amps))
         ctk.CTkLabel(settings_frame, text="A", font=("Roboto", 10)).grid(row=1, column=2, padx=(0, 5), pady=8, sticky="w")
+
+        # Peak solar hour (0 = auto / solar noon)
+        ctk.CTkLabel(settings_frame, text="Peak Hour:", font=("Roboto", 10),
+                      text_color="#F39C12").grid(row=1, column=4, padx=(10, 2), pady=8, sticky="w")
+        self.peak_solar_hour = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.peak_solar_hour.grid(row=1, column=5, padx=2, pady=8)
+        self.peak_solar_hour.insert(0, str(sunset_config.peak_solar_hour) if sunset_config.peak_solar_hour > 0 else "auto")
+        ctk.CTkLabel(settings_frame, text="(0=auto)", font=("Roboto", 9),
+                      text_color="#777").grid(row=1, column=6, padx=(0, 5), pady=8, sticky="w")
+
+        # Third row: Cloudy day compensation
+        ctk.CTkLabel(settings_frame, text="Peak kW:", font=("Roboto", 10),
+                      text_color="#E67E22").grid(row=2, column=0, padx=(10, 2), pady=8, sticky="w")
+        self.peak_expected_kw = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.peak_expected_kw.grid(row=2, column=1, padx=2, pady=8)
+        self.peak_expected_kw.insert(0, str(sunset_config.peak_expected_kw) if sunset_config.peak_expected_kw > 0 else "off")
+        ctk.CTkLabel(settings_frame, text="kW", font=("Roboto", 10)).grid(row=2, column=2, padx=(0, 5), pady=8, sticky="w")
+
+        ctk.CTkLabel(settings_frame, text="Cloud Thr:", font=("Roboto", 10),
+                      text_color="#E67E22").grid(row=2, column=4, padx=(10, 2), pady=8, sticky="w")
+        self.cloud_threshold = ctk.CTkEntry(settings_frame, width=40, justify="center")
+        self.cloud_threshold.grid(row=2, column=5, padx=2, pady=8)
+        self.cloud_threshold.insert(0, str(sunset_config.cloud_threshold_pct))
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=2, column=6, padx=(0, 5), pady=8, sticky="w")
+
+        ctk.CTkLabel(settings_frame, text="Max Boost:", font=("Roboto", 10),
+                      text_color="#E67E22").grid(row=2, column=7, padx=(10, 2), pady=8, sticky="w")
+        self.cloud_max_boost = ctk.CTkEntry(settings_frame, width=40, justify="center")
+        self.cloud_max_boost.grid(row=2, column=8, padx=2, pady=8)
+        self.cloud_max_boost.insert(0, str(sunset_config.cloud_max_boost))
+        ctk.CTkLabel(settings_frame, text="x", font=("Roboto", 10)).grid(row=2, column=9, padx=(0, 5), pady=8, sticky="w")
         
         # State display
         state_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -1348,6 +1379,20 @@ class SunsetChargingPanel(ctk.CTkFrame):
     def is_enabled(self) -> bool:
         return self.enabled_var.get()
     
+    def _parse_peak_solar_hour(self) -> float:
+        """Parse peak solar hour field. Returns 0.0 for 'auto' or empty."""
+        raw = self.peak_solar_hour.get().strip().lower()
+        if raw in ("", "auto", "0", "0.0"):
+            return 0.0
+        return float(raw)
+
+    def _parse_peak_expected_kw(self) -> float:
+        """Parse peak expected kW field. Returns 0.0 for 'off' or empty."""
+        raw = self.peak_expected_kw.get().strip().lower()
+        if raw in ("", "off", "0", "0.0"):
+            return 0.0
+        return float(raw)
+
     def get_settings(self) -> dict:
         """Get current settings from UI fields."""
         try:
@@ -1358,6 +1403,10 @@ class SunsetChargingPanel(ctk.CTkFrame):
                 "target_soc": int(self.target_soc.get()),
                 "buffer_minutes": int(self.buffer_minutes.get()),
                 "min_charge_amps": int(self.min_charge.get()),
+                "peak_solar_hour": self._parse_peak_solar_hour(),
+                "peak_expected_kw": self._parse_peak_expected_kw(),
+                "cloud_threshold_pct": int(self.cloud_threshold.get()),
+                "cloud_max_boost": float(self.cloud_max_boost.get()),
             }
         except (ValueError, TypeError):
             return {
@@ -1367,9 +1416,14 @@ class SunsetChargingPanel(ctk.CTkFrame):
                 "target_soc": sunset_config.target_soc,
                 "buffer_minutes": sunset_config.buffer_minutes,
                 "min_charge_amps": sunset_config.min_charge_amps,
+                "peak_solar_hour": sunset_config.peak_solar_hour,
+                "peak_expected_kw": sunset_config.peak_expected_kw,
+                "cloud_threshold_pct": sunset_config.cloud_threshold_pct,
+                "cloud_max_boost": sunset_config.cloud_max_boost,
             }
     
-    def update_state(self, sunset_str: str, hours_left: float, required_amps: int, active: bool) -> None:
+    def update_state(self, sunset_str: str, hours_left: float, required_amps: int, active: bool,
+                      cloud_boost: float = 1.0) -> None:
         """Update the state display labels."""
         self.lbl_sunset_time.configure(text=f"Sunset: {sunset_str}")
         
@@ -1385,7 +1439,8 @@ class SunsetChargingPanel(ctk.CTkFrame):
         
         if active:
             color = "#E74C3C" if required_amps > 100 else "#F39C12" if required_amps > 50 else "#2ECC71"
-            self.lbl_required_amps.configure(text=f"Required: {required_amps}A", text_color=color)
+            cloud_str = f" \u2601{cloud_boost:.1f}x" if cloud_boost > 1.05 else ""
+            self.lbl_required_amps.configure(text=f"Required: {required_amps}A{cloud_str}", text_color=color)
         else:
             self.lbl_required_amps.configure(text="Standby", text_color="gray")
 
