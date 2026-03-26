@@ -23,7 +23,9 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Verifies inverter has caught up to current charge setting before adjusting further
 - 🌅 **Sunset-Aware Charging** - Dynamically adjusts charge rate throughout the day to reach target SOC by sunset:
   - Offline astronomical calculations via `astral` library (no internet needed)
-  - Solar-curve-weighted algorithm (cos² from noon) for midday-heavy charging
+  - Solar-curve-weighted algorithm (cos²) for production-peak-heavy charging
+  - Configurable peak solar hour for non-south-facing panels (or auto = solar noon)
+  - Cloudy day compensation: compares 15-min rolling PV average against expected cos² curve; boosts charging when production drops below threshold
   - Configurable target SOC, buffer time, and battery capacity
   - 10A step rounding and throttled writes to avoid excessive register writes
   - Automatically coordinates with battery boost protection (protection yields when sunset charging is active)
@@ -40,7 +42,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 - 🔌 **EV Smart Charger (Tuya)** - Intelligent EV charging via a Tuya-enabled charger (e.g. feyree):
   - _Charging modes_:
     - **Fixed-rate** — Charges at max amps while home battery SOC is above start threshold
-    - **Solar-follow** — Scales amperage in real time based on solar export surplus (export_watts / 230 V)
+    - **Solar-follow** — Scales amperage in real time based on solar surplus (PV production minus house consumption)
     - **Grid charge** — Always charges at configured amps while grid is connected
     - **Battery pacing** — At night, spreads charge over remaining hours until a target time to avoid draining the house battery
   - _Protection_:
@@ -81,7 +83,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     ├── config.py           # Configuration management
     ├── deye_inverter.py    # Deye inverter communication
     ├── ems_logic.py        # Energy management logic (Tapo outlets)
-    ├── tev_logic.py         # EV smart charging decision engine
+    ├── ev_logic.py         # EV smart charging decision engine
     ├── tapo_manager.py     # Tapo smart plug control
     ├── tuya_charger.py     # Tuya EV charger device manager
     ├── tuya_heatpump.py    # Tuya thermostat device manager
@@ -179,15 +181,19 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 #### Sunset Charging Settings
 
-| Variable                  | Description                                          | Default |
-| ------------------------- | ---------------------------------------------------- | ------- |
-| `SOLAR_LATITUDE`          | Your location latitude                               | 47.00   |
-| `SOLAR_LONGITUDE`         | Your location longitude                              | 22.00   |
-| `BATTERY_CAPACITY_AH`     | Total battery capacity in Amp-hours                  | 600     |
-| `SUNSET_TARGET_SOC`       | Target SOC to reach by sunset (%)                    | 100     |
-| `SUNSET_BUFFER_MINUTES`   | Finish charging this many minutes before sunset      | 60      |
-| `SUNSET_MIN_CHARGE_AMPS`  | Minimum charge rate when sunset charging is active   | 10      |
-| `SUNSET_CHARGING_ENABLED` | Enable sunset-aware charging at startup (true/false) | true    |
+| Variable                     | Description                                                           | Default |
+| ---------------------------- | --------------------------------------------------------------------- | ------- |
+| `SOLAR_LATITUDE`             | Your location latitude                                                | 47.00   |
+| `SOLAR_LONGITUDE`            | Your location longitude                                               | 22.00   |
+| `BATTERY_CAPACITY_AH`        | Total battery capacity in Amp-hours                                   | 600     |
+| `SUNSET_TARGET_SOC`          | Target SOC to reach by sunset (%)                                     | 100     |
+| `SUNSET_BUFFER_MINUTES`      | Finish charging this many minutes before sunset                       | 60      |
+| `SUNSET_MIN_CHARGE_AMPS`     | Minimum charge rate when sunset charging is active                    | 10      |
+| `SUNSET_PEAK_SOLAR_HOUR`     | Peak solar production hour in local time (e.g. 13.5); 0 = auto (noon) | 0       |
+| `SUNSET_PEAK_EXPECTED_KW`    | Peak clear-sky PV output in kW (e.g. 14); 0 = no cloudy compensation  | 0       |
+| `SUNSET_CLOUD_THRESHOLD_PCT` | Below this % of expected PV → apply cloudy boost                      | 60      |
+| `SUNSET_CLOUD_MAX_BOOST`     | Maximum cloudy-day boost multiplier                                   | 3.0     |
+| `SUNSET_CHARGING_ENABLED`    | Enable sunset-aware charging at startup (true/false)                  | true    |
 
 #### Tapo Smart Plug Outlets
 
@@ -331,7 +337,7 @@ HEATPUMP_SCHEDULE_3=18:00-06:00,28,35       # Evening/night: maintain 28-35°C
 | Stop SOC      | Home battery SOC to stop EV charging                     | 20%     |
 | Charge by     | Target hour for battery-paced charging (night)           | 7:00    |
 | Cooldown      | Minutes between charger state changes                    | 5 min   |
-| Solar Follow  | Scale amps to match solar export surplus                 | Off     |
+| Solar Follow  | Scale amps to match solar surplus (PV minus house loads) | Off     |
 | Grid charge   | Always charge at configured amps while grid is available | Off     |
 | Grid charge A | Amps to use in grid charge mode                          | 20A     |
 
