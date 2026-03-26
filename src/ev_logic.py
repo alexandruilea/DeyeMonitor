@@ -229,18 +229,24 @@ class EVChargingLogic:
     def _process_solar(self, data: InverterData, settings: EVSettings,
                        charger_state: ChargerState, now: float
                        ) -> Tuple[EVResult, str]:
-        """Calculate target amps from surplus solar export."""
-        # Export power = negative grid_power means exporting
-        export_watts = max(0, -data.grid_power)
-        # Also add what the charger is already consuming (so we don't fight ourselves)
+        """Calculate target amps from surplus solar power.
+        
+        Uses PV production minus total house consumption as the true solar
+        surplus. This correctly accounts for all loads (heat pump, lights,
+        etc.) and doesn't need to "add back" the charger's own draw since
+        pv_power is measured at the panels, independent of where power flows.
+        """
+        total_consumption = sum(data.total_loads)
+        surplus_watts = max(0, data.pv_power - total_consumption)
+        # Add back what the charger is already consuming — its draw is included
+        # in total_loads, but it IS available solar capacity we can keep using
         if charger_state.is_on:
-            # Rough estimate: amps × ~230V single-phase
-            export_watts += charger_state.current_amps * 230
+            surplus_watts += charger_state.current_amps * 230
 
-        target_amps = max(settings.min_amps, min(int(export_watts / 230), settings.max_amps))
+        target_amps = max(settings.min_amps, min(int(surplus_watts / 230), settings.max_amps))
 
         if target_amps < settings.min_amps:
-            # Not enough solar to run at minimum amps from export alone
+            # Not enough solar to run at minimum amps
             if data.soc > settings.stop_soc:
                 # Battery has enough charge — keep charging at min amps from battery
                 target_amps = settings.min_amps
@@ -248,22 +254,22 @@ class EVChargingLogic:
                 # Battery too low to supplement — stop
                 if charger_state.is_on:
                     self._send_off(now)
-                    return EVResult.SOLAR_CHARGING, f"OFF (export {export_watts}W < {settings.min_amps}A, SOC {data.soc}%)"
-                return EVResult.SOLAR_CHARGING, f"Waiting for solar ({export_watts}W, SOC {data.soc}%)"
+                    return EVResult.SOLAR_CHARGING, f"OFF (surplus {surplus_watts}W < {settings.min_amps}A, SOC {data.soc}%)"
+                return EVResult.SOLAR_CHARGING, f"Waiting for solar ({surplus_watts}W surplus, SOC {data.soc}%)"
         else:
             target_amps = min(target_amps, settings.max_amps)
 
         if not charger_state.is_on:
             self._send_on(target_amps, now)
-            return EVResult.SOLAR_CHARGING, f"ON {target_amps}A ({export_watts}W export)"
+            return EVResult.SOLAR_CHARGING, f"ON {target_amps}A ({surplus_watts}W surplus)"
 
         # Already on — adjust amps if different
         if target_amps != charger_state.current_amps:
             self._send_amps(target_amps, now)
-            return EVResult.SOLAR_CHARGING, f"→ {target_amps}A ({export_watts}W export)"
+            return EVResult.SOLAR_CHARGING, f"→ {target_amps}A ({surplus_watts}W surplus)"
 
         self._state.was_charging = True
-        return EVResult.SOLAR_CHARGING, f"{charger_state.current_amps}A ({export_watts}W export)"
+        return EVResult.SOLAR_CHARGING, f"{charger_state.current_amps}A ({surplus_watts}W surplus)"
 
     # ------------------------------------------------------------------
     # Command helpers
