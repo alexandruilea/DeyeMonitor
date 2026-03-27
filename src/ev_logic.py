@@ -49,6 +49,8 @@ class EVSettings:
     charge_by_hour: int = 7         # Target completion hour (0-23, local time)
     grid_charge: bool = False       # Always charge while grid is available
     grid_charge_amps: int = 20        # Amps to use when grid-charging EV
+    solar_ramp_down_delay: int = 5    # Minutes between solar ramp-down steps
+    solar_amp_steps: tuple = (8, 16, 24, 32)  # Significant amp levels for ramp-down
 
 
 @dataclass
@@ -60,6 +62,7 @@ class EVState:
     was_charging: bool = False
     grid_pull_since: float = 0.0   # Timestamp when grid-import (no battery) started
     grid_pull_active: bool = False # True once we detect sustained grid import
+    last_ramp_down_time: float = 0.0  # Timestamp of last solar ramp-down
 
 
 class EVChargingLogic:
@@ -265,8 +268,33 @@ class EVChargingLogic:
 
         # Already on — adjust amps if different
         if target_amps != charger_state.current_amps:
-            self._send_amps(target_amps, now)
-            return EVResult.SOLAR_CHARGING, f"→ {target_amps}A ({surplus_watts}W surplus)"
+            current = charger_state.current_amps
+            if target_amps > current:
+                # Ramping UP — apply immediately (more solar available)
+                self._send_amps(target_amps, now)
+                return EVResult.SOLAR_CHARGING, f"↑ {target_amps}A ({surplus_watts}W surplus)"
+            else:
+                # Ramping DOWN — snap to step levels with delay to avoid
+                # frequent charger restarts that can upset the car
+                ramp_cooldown = settings.solar_ramp_down_delay * 60
+                if now - self._state.last_ramp_down_time < ramp_cooldown:
+                    remaining = int(ramp_cooldown - (now - self._state.last_ramp_down_time))
+                    return EVResult.SOLAR_CHARGING, (
+                        f"{current}A (holding, ramp ↓ in {remaining}s, "
+                        f"{surplus_watts}W surplus)"
+                    )
+                # Find the next lower step
+                steps = sorted(settings.solar_amp_steps)
+                step_target = steps[0]  # Default to lowest step
+                for s in reversed(steps):
+                    if s <= target_amps:
+                        step_target = s
+                        break
+                step_target = max(settings.min_amps, step_target)
+                if step_target != current:
+                    self._send_amps(step_target, now)
+                    self._state.last_ramp_down_time = now
+                    return EVResult.SOLAR_CHARGING, f"↓ {step_target}A ({surplus_watts}W surplus)"
 
         self._state.was_charging = True
         return EVResult.SOLAR_CHARGING, f"{charger_state.current_amps}A ({surplus_watts}W surplus)"

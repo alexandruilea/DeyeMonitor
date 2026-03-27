@@ -203,6 +203,8 @@ class EVChargerConfig:
     change_interval_minutes: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_CHANGE_INTERVAL", "5")))
     charge_by_hour: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_CHARGE_BY_HOUR", "7")))  # Target hour (0-23) for battery-paced charging
     grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_GRID_CHARGE_AMPS", "20")))  # Amps to use when grid-charging EV
+    solar_ramp_down_delay: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_SOLAR_RAMP_DOWN_DELAY", "5")))  # Minutes between solar ramp-down steps
+    solar_amp_steps: tuple = field(default_factory=lambda: tuple(int(x) for x in os.getenv("EV_CHARGER_SOLAR_AMP_STEPS", "8,16,24,32").split(",")))
     # Tuya DPS mapping (varies by charger model)
     dp_switch: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_SWITCH", "1")))
     dp_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS", "6")))
@@ -243,7 +245,7 @@ class TuyaHeatpumpConfig:
     solar_override_enabled: bool = field(default_factory=lambda: os.getenv("HEATPUMP_SOLAR_OVERRIDE", "true").lower() == "true")
     solar_override_export_min: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN", "1000")))  # Min export watts to trigger ON
     solar_override_hp_power: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_HP_POWER", "3000")))  # Approx heat pump consumption (W)
-    solar_override_off_delay: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_OFF_DELAY", "60")))  # Seconds before solar override deactivates
+    solar_override_delay: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_DELAY", os.getenv("HEATPUMP_SOLAR_OVERRIDE_OFF_DELAY", "60"))))  # Seconds export/import must sustain before solar override activates/deactivates
     # SOC-based override: turn ON when battery is full
     soc_on_threshold: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOC_ON_THRESHOLD", "90")))  # SOC >= this → force ON
     soc_off_threshold: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOC_OFF_THRESHOLD", "30")))  # SOC <= this → force OFF

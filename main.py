@@ -1032,6 +1032,8 @@ class DeyeApp(ctk.CTk):
             charge_by_hour=ui_settings.get("charge_by_hour", 7),
             grid_charge=ui_settings.get("grid_charge", False),
             grid_charge_amps=ui_settings.get("grid_charge_amps", 20),
+            solar_ramp_down_delay=ui_settings.get("solar_ramp_down_delay", 5),
+            solar_amp_steps=ui_settings.get("solar_amp_steps", (8, 16, 24, 32)),
         )
 
         result, detail = self.ev_logic.process(data, settings)
@@ -1264,7 +1266,7 @@ class DeyeApp(ctk.CTk):
             solar_override_enabled=ui_settings["solar_override_enabled"],
             solar_override_export_min=ui_settings["solar_override_export_min"],
             solar_override_hp_power=ui_settings["solar_override_hp_power"],
-            solar_override_off_delay=ui_settings["solar_override_off_delay"],
+            solar_override_delay=ui_settings["solar_override_delay"],
             soc_on_threshold=ui_settings["soc_on_threshold"],
             soc_off_threshold=ui_settings["soc_off_threshold"],
             hv_threshold=ui_settings["hv_threshold"],

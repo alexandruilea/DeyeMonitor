@@ -43,7 +43,7 @@ class HeatpumpSettings:
     solar_override_enabled: bool = True
     solar_override_export_min: int = 1000  # Min export watts to trigger ON
     solar_override_hp_power: int = 3000    # HP rated power (W)
-    solar_override_off_delay: int = 60     # Seconds before solar override deactivates
+    solar_override_delay: int = 60         # Seconds export/import must sustain before solar override activates/deactivates
     # SOC-based override
     soc_on_threshold: int = 90             # SOC >= this → force ON
     soc_off_threshold: int = 40            # SOC <= this → force OFF
@@ -78,6 +78,7 @@ class HeatpumpLogic:
         self._hv_off_timer_start: Optional[float] = None
         self._soc_low_timer_start: Optional[float] = None
         self._soc_off_timer_start: Optional[float] = None
+        self._solar_on_timer_start: Optional[float] = None
         self._solar_off_timer_start: Optional[float] = None
 
     @staticmethod
@@ -121,6 +122,7 @@ class HeatpumpLogic:
         self._hv_off_timer_start = None
         self._soc_low_timer_start = None
         self._soc_off_timer_start = None
+        self._solar_on_timer_start = None
         self._solar_off_timer_start = None
 
     def process(self, settings: HeatpumpSettings, grid_power: int, soc: int,
@@ -256,13 +258,13 @@ class HeatpumpLogic:
 
         # ── 3. SOC low → force OFF (with delay, then lockout) ─────
         # When SOC drops to soc_off_threshold, start a timer.
-        # After off_delay seconds, force OFF and lock out schedule
+        # After delay seconds, force OFF and lock out schedule
         # until SOC recovers to soc_on_threshold.
         if soc <= settings.soc_off_threshold:
             if self._soc_low_timer_start is None:
                 self._soc_low_timer_start = time.time()
             elapsed = time.time() - self._soc_low_timer_start
-            if elapsed >= settings.solar_override_off_delay:
+            if elapsed >= settings.solar_override_delay:
                 self._solar_override_active = False
                 self._soc_override_active = False
                 self._soc_low_lockout = True
@@ -273,7 +275,7 @@ class HeatpumpLogic:
                 )
             else:
                 # Still counting down — show pending shutdown but don't force OFF yet
-                remaining = settings.solar_override_off_delay - elapsed
+                remaining = settings.solar_override_delay - elapsed
                 return HeatpumpResult.SOC_LOW, (
                     f"{temperature:.1f}°C | {dev_target} | {v_str} | "
                     f"SOC {soc}% ≤ {settings.soc_off_threshold}% | OFF in {remaining:.0f}s"
@@ -294,7 +296,7 @@ class HeatpumpLogic:
 
         # ── 4. SOC high → apply schedule (not override target) ────
         # Once active, stays ON until SOC drops to soc_off_threshold (priority 3)
-        # or grid import exceeds 50% of HP power (sustained for off_delay).
+        # or grid import exceeds 50% of HP power (sustained for delay).
         # Unlike solar/HV overrides, SOC ON uses the schedule interval temp.
         max_grid_import = settings.solar_override_hp_power / 2
         if not self._soc_override_active:
@@ -305,7 +307,7 @@ class HeatpumpLogic:
             if grid_import > max_grid_import:
                 if self._soc_off_timer_start is None:
                     self._soc_off_timer_start = time.time()
-                if (time.time() - self._soc_off_timer_start) >= settings.solar_override_off_delay:
+                if (time.time() - self._soc_off_timer_start) >= settings.solar_override_delay:
                     self._soc_override_active = False
                     self._soc_off_timer_start = None
             else:
@@ -314,7 +316,7 @@ class HeatpumpLogic:
         if self._soc_override_active:
             countdown = ""
             if self._soc_off_timer_start is not None:
-                remaining = settings.solar_override_off_delay - (time.time() - self._soc_off_timer_start)
+                remaining = settings.solar_override_delay - (time.time() - self._soc_off_timer_start)
                 countdown = f" | OFF in {remaining:.0f}s"
             # Use schedule interval temp, not override (80°C)
             if active_slot is not None:
@@ -333,17 +335,25 @@ class HeatpumpLogic:
         if settings.solar_override_enabled:
             if not self._solar_override_active:
                 self._solar_off_timer_start = None
+                # Require sustained export for delay seconds before activating
                 if export_watts >= settings.solar_override_export_min:
-                    self._solar_override_active = True
+                    if self._solar_on_timer_start is None:
+                        self._solar_on_timer_start = time.time()
+                    if (time.time() - self._solar_on_timer_start) >= settings.solar_override_delay:
+                        self._solar_override_active = True
+                        self._solar_on_timer_start = None
+                else:
+                    self._solar_on_timer_start = None
             else:
-                # Stop if grid import exceeds 50% of HP power (sustained for off_delay)
+                self._solar_on_timer_start = None
+                # Stop if grid import exceeds 50% of HP power (sustained for delay)
                 # SOC-based stop is handled by priority 3 (SOC low → force OFF)
                 max_grid_import = settings.solar_override_hp_power / 2
                 should_stop = grid_import > max_grid_import
                 if should_stop:
                     if self._solar_off_timer_start is None:
                         self._solar_off_timer_start = time.time()
-                    if (time.time() - self._solar_off_timer_start) >= settings.solar_override_off_delay:
+                    if (time.time() - self._solar_off_timer_start) >= settings.solar_override_delay:
                         self._solar_override_active = False
                         self._solar_off_timer_start = None
                 else:
@@ -352,7 +362,7 @@ class HeatpumpLogic:
             if self._solar_override_active:
                 countdown = ""
                 if self._solar_off_timer_start is not None:
-                    remaining = settings.solar_override_off_delay - (time.time() - self._solar_off_timer_start)
+                    remaining = settings.solar_override_delay - (time.time() - self._solar_off_timer_start)
                     countdown = f" | OFF in {remaining:.0f}s"
                 self._apply_target(override_target, 0.5)
                 return HeatpumpResult.SOLAR_OVERRIDE, (

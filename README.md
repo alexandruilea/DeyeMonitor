@@ -37,12 +37,12 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     - **HV dump** — Forces ON (80 °C) when any phase exceeds HV threshold; hysteresis OFF with delay below HV OFF threshold
     - **SOC low** — Forces OFF with configurable delay, then locks out schedule until SOC recovers to ON threshold
     - **SOC high** — Forces ON using the active schedule temperature (not 80 °C) when SOC ≥ ON threshold; deactivates on sustained grid import > 50 % of HP power
-    - **Solar export** — Forces ON (80 °C) when grid export exceeds threshold; configurable OFF delay rides through brief inverter glitches
+    - **Solar export** — Forces ON (80 °C) when grid export exceeds threshold for a sustained delay period; same delay applies before deactivating on grid import, riding through brief inverter glitches
   - _Monitoring_: Supports L1, L2, L3, or ANY phase (uses min voltage for LV, max for HV); live "OFF in Xs" / "Recovery in Xs" countdown for all delayed transitions
 - 🔌 **EV Smart Charger (Tuya)** - Intelligent EV charging via a Tuya-enabled charger (e.g. feyree):
   - _Charging modes_:
     - **Fixed-rate** — Charges at max amps while home battery SOC is above start threshold
-    - **Solar-follow** — Scales amperage in real time based on solar surplus (PV production minus house consumption)
+    - **Solar-follow** — Scales amperage in real time based on solar surplus (PV production minus house consumption); ramps up instantly but ramps down only in significant steps (e.g. 32→24→16→8A) with a configurable delay between steps to avoid frequent charger restarts that can upset the car
     - **Grid charge** — Always charges at configured amps while grid is connected
     - **Battery pacing** — At night, spreads charge over remaining hours until a target time to avoid draining the house battery
   - _Protection_:
@@ -207,21 +207,23 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 #### TEV Smart Charger (Tuya)
 
-| Variable                      | Descriptio n                                                | Default |
-| ----------------------------- | ----------------------------------------------------------- | ------- |
-| `EV_CHARGER_ENABLED      `    | Enable EV charger control at startu p                       | `false` |
-| `EV_CHARGER_DEVICE_ID  `      | Tuya Device ID (from `tinytuya wizard` )                    |         |
-| `EV_CHARGER_IP     `          | Charger IP address on local networ k                        |         |
-| `EV_CHARGER_LOCAL_KEY       ` | Tuya Local Key (from `tinytuya wizard` )                    |         |
-| `EV_CHARGER_PROTOCOL_VERSION` | Tuya protocol version (3.3 / 3.4 )                          | `3.3  ` |
-| `EV_CHARGER_MIN_AMPS`         | Minimum charging current (A )                               | `8    ` |
-| `EV_CHARGER_MAX_AMPS    `     | Maximum charging current (A )                               | `32   ` |
-| `EV_CHARGER_STOP_SOC`         | Stop EV charging when home battery drops below this SOC (%) | `20  `  |
-| `EV_CHARGER_START_SOC    `    | Only start EV charging above this SOC (% )                  | `80 `   |
-| `EV_CHARGER_SOLAR_MODE`       | Scale amps based on solar export surplu s                   | `false` |
-| `EV_CHARGER_CHANGE_INTERVAL`  | Minutes between charger state change s                      | `5    ` |
-| `EV_CHARGER_CHARGE_BY_HOUR  ` | Target hour (0-23) for battery-paced chargin g              | `7    ` |
-| `EV_CHARGER_GRID_CHARGE_AMPS` | Amps to use in grid charge mod e                            | `20   ` |
+| Variable                           | Descriptio n                                                | Default      |
+| ---------------------------------- | ----------------------------------------------------------- | ------------ |
+| `EV_CHARGER_ENABLED      `         | Enable EV charger control at startu p                       | `false`      |
+| `EV_CHARGER_DEVICE_ID  `           | Tuya Device ID (from `tinytuya wizard` )                    |              |
+| `EV_CHARGER_IP     `               | Charger IP address on local networ k                        |              |
+| `EV_CHARGER_LOCAL_KEY       `      | Tuya Local Key (from `tinytuya wizard` )                    |              |
+| `EV_CHARGER_PROTOCOL_VERSION`      | Tuya protocol version (3.3 / 3.4 )                          | `3.3  `      |
+| `EV_CHARGER_MIN_AMPS`              | Minimum charging current (A )                               | `8    `      |
+| `EV_CHARGER_MAX_AMPS    `          | Maximum charging current (A )                               | `32   `      |
+| `EV_CHARGER_STOP_SOC`              | Stop EV charging when home battery drops below this SOC (%) | `20  `       |
+| `EV_CHARGER_START_SOC    `         | Only start EV charging above this SOC (% )                  | `80 `        |
+| `EV_CHARGER_SOLAR_MODE`            | Scale amps based on solar export surplu s                   | `false`      |
+| `EV_CHARGER_CHANGE_INTERVAL`       | Minutes between charger state change s                      | `5    `      |
+| `EV_CHARGER_CHARGE_BY_HOUR  `      | Target hour (0-23) for battery-paced chargin g              | `7    `      |
+| `EV_CHARGER_GRID_CHARGE_AMPS`      | Amps to use in grid charge mod e                            | `20   `      |
+| `EV_CHARGER_SOLAR_RAMP_DOWN_DELAY` | Minutes between solar ramp-down steps                       | `5`          |
+| `EV_CHARGER_SOLAR_AMP_STEPS`       | Comma-separated significant amp levels for ramp-down        | `8,16,24,32` |
 
 **Tuya DPS Mapping (charger model-specific):**
 
@@ -258,12 +260,12 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 **Solar Override:**
 
-| Variable                             | Description                                      | Default |
-| ------------------------------------ | ------------------------------------------------ | ------- |
-| `HEATPUMP_SOLAR_OVERRIDE`            | Enable solar override                            | `true`  |
-| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN` | Min grid export (W) to trigger ON                | `3000`  |
-| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`   | HP rated power (W) — stops if grid import > half | `3000`  |
-| `HEATPUMP_SOLAR_OVERRIDE_OFF_DELAY`  | Seconds before deactivating solar override       | `60`    |
+| Variable                             | Description                                                                    | Default |
+| ------------------------------------ | ------------------------------------------------------------------------------ | ------- |
+| `HEATPUMP_SOLAR_OVERRIDE`            | Enable solar override                                                          | `true`  |
+| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN` | Min grid export (W) to trigger ON                                              | `3000`  |
+| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`   | HP rated power (W) — stops if grid import > half                               | `3000`  |
+| `HEATPUMP_SOLAR_OVERRIDE_DELAY`      | Seconds export/import must sustain before solar override activates/deactivates | `60`    |
 
 **SOC Overrides:**
 
@@ -328,36 +330,38 @@ HEATPUMP_SCHEDULE_3=18:00-06:00,28,35       # Evening/night: maintain 28-35°C
 
 #### EV Smart Charger
 
-| Parameter     | Description                                              | Default |
-| ------------- | -------------------------------------------------------- | ------- |
-| Enable        | Enable/disable EV charger control                        | Off     |
-| Min Amps      | Minimum charging current                                 | 8A      |
-| Max Amps      | Maximum charging current                                 | 32A     |
-| Start SOC     | Home battery SOC to start EV charging                    | 80%     |
-| Stop SOC      | Home battery SOC to stop EV charging                     | 20%     |
-| Charge by     | Target hour for battery-paced charging (night)           | 7:00    |
-| Cooldown      | Minutes between charger state changes                    | 5 min   |
-| Solar Follow  | Scale amps to match solar surplus (PV minus house loads) | Off     |
-| Grid charge   | Always charge at configured amps while grid is available | Off     |
-| Grid charge A | Amps to use in grid charge mode                          | 20A     |
+| Parameter     | Description                                              | Default    |
+| ------------- | -------------------------------------------------------- | ---------- |
+| Enable        | Enable/disable EV charger control                        | Off        |
+| Min Amps      | Minimum charging current                                 | 8A         |
+| Max Amps      | Maximum charging current                                 | 32A        |
+| Start SOC     | Home battery SOC to start EV charging                    | 80%        |
+| Stop SOC      | Home battery SOC to stop EV charging                     | 20%        |
+| Charge by     | Target hour for battery-paced charging (night)           | 7:00       |
+| Cooldown      | Minutes between charger state changes                    | 5 min      |
+| Solar Follow  | Scale amps to match solar surplus (PV minus house loads) | Off        |
+| Grid charge   | Always charge at configured amps while grid is available | Off        |
+| Grid charge A | Amps to use in grid charge mode                          | 20A        |
+| Ramp ↓ delay  | Minutes between solar ramp-down steps                    | 5 min      |
+| Amp steps     | Significant amp levels for ramp-down (comma-separated)   | 8,16,24,32 |
 
 ### Heat Pump – Socket Thermostat
 
-| Parameter        | Description                                                        | Default |
-| ---------------- | ------------------------------------------------------------------ | ------- |
-| Solar Override   | Enable/disable solar export override                               | On      |
-| Trigger W        | Minimum grid export watts to trigger solar override ON             | 3000W   |
-| HP Power W       | Heat pump rated power — solar override stops if grid import > half | 3000W   |
-| OFF Delay s      | Seconds before solar override / SOC override deactivates           | 60s     |
-| SOC ON %         | SOC ≥ this → force ON using schedule temp                          | 90%     |
-| SOC OFF %        | SOC ≤ this → force OFF with delay + lockout                        | 30%     |
-| HV ON V          | Voltage threshold to trigger HV dump (80 °C target)                | 252V    |
-| HV OFF V         | HV hysteresis OFF threshold                                        | 245V    |
-| LV OFF V         | Low voltage shutdown threshold                                     | 210V    |
-| Delay s          | Seconds voltage must sustain before HV/LV triggers                 | 10s     |
-| LV Recovery V    | Voltage required for LV recovery                                   | 220V    |
-| Recovery Delay s | Seconds voltage must stay above recovery threshold                 | 300s    |
-| Schedule slots   | Time intervals with min/max temperature ranges                     | —       |
+| Parameter        | Description                                                                    | Default |
+| ---------------- | ------------------------------------------------------------------------------ | ------- |
+| Solar Override   | Enable/disable solar export override                                           | On      |
+| Trigger W        | Minimum grid export watts to trigger solar override ON                         | 3000W   |
+| HP Power W       | Heat pump rated power — solar override stops if grid import > half             | 3000W   |
+| Delay s          | Seconds export/import must sustain before solar override activates/deactivates | 60s     |
+| SOC ON %         | SOC ≥ this → force ON using schedule temp                                      | 90%     |
+| SOC OFF %        | SOC ≤ this → force OFF with delay + lockout                                    | 30%     |
+| HV ON V          | Voltage threshold to trigger HV dump (80 °C target)                            | 252V    |
+| HV OFF V         | HV hysteresis OFF threshold                                                    | 245V    |
+| LV OFF V         | Low voltage shutdown threshold                                                 | 210V    |
+| Delay s          | Seconds voltage must sustain before HV/LV triggers                             | 10s     |
+| LV Recovery V    | Voltage required for LV recovery                                               | 220V    |
+| Recovery Delay s | Seconds voltage must stay above recovery threshold                             | 300s    |
+| Schedule slots   | Time intervals with min/max temperature ranges                                 | —       |
 
 ## Usage
 
