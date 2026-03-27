@@ -19,6 +19,7 @@ from src.tuya_charger import TuyaChargerManager
 from src.ev_logic import EVChargingLogic, EVSettings, EVResult
 from src.tuya_heatpump import TuyaHeatpumpManager
 from src.tuya_heatpump_logic import HeatpumpLogic, HeatpumpSettings, HeatpumpResult
+from src.weather_forecast import WeatherForecast
 from src.ui_components import (
     PhaseDisplay,
     SettingsPanel,
@@ -128,6 +129,15 @@ class DeyeApp(ctk.CTk):
         self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
         self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling window
         self._cloud_boost_factor = 1.0  # Current cloudy day boost multiplier
+        
+        # Weather forecast for predictive sunset charging
+        from src.config import sunset_config
+        self._weather = WeatherForecast(
+            latitude=sunset_config.latitude,
+            longitude=sunset_config.longitude,
+            refresh_hours=sunset_config.weather_refresh_hours,
+        )
+        self._weather_enabled = sunset_config.weather_enabled
         
         # Track if main loop has started (for safe error logging from threads)
         self._main_loop_started = False
@@ -676,6 +686,15 @@ class DeyeApp(ctk.CTk):
         sunset_local = sunset_utc.astimezone()
         sunset_str = sunset_local.strftime("%H:%M")
         
+        # Refresh weather forecast in background if needed
+        if self._weather_enabled and self._weather.needs_refresh():
+            self._weather.latitude = settings["latitude"]
+            self._weather.longitude = settings["longitude"]
+            threading.Thread(target=self._weather.fetch, daemon=True).start()
+        
+        weather_str = self._weather.summary_str() if self._weather_enabled else ""
+        sparkline = self._weather.day_sparkline() if self._weather_enabled else ""
+        
         current_soc = data.soc
         target_soc = settings["target_soc"]
         capacity_ah = settings["battery_capacity_ah"]
@@ -693,13 +712,11 @@ class DeyeApp(ctk.CTk):
             return
         
         # Solar-curve-weighted charging calculation
-        # Weight = cos²(angle from peak) → peaks at configured hour (or solar noon), tapers to edges
         remaining_ah = capacity_ah * (target_soc - current_soc) / 100.0
         
-        # Determine peak time: use configured peak_solar_hour or fall back to solar noon
+        # Determine peak time for cos² fallback curve
         peak_hour = settings.get("peak_solar_hour", 0.0)
         if peak_hour > 0:
-            # Convert local decimal hour to UTC datetime for today
             peak_h = int(peak_hour)
             peak_m = int((peak_hour - peak_h) * 60)
             peak_local = now.astimezone().replace(hour=peak_h, minute=peak_m, second=0, microsecond=0)
@@ -707,13 +724,53 @@ class DeyeApp(ctk.CTk):
         else:
             peak_utc = noon_utc
         
+        # Try forecast-based weights first, fall back to cos² curve
+        forecast_active = False
+        forecast_weights = []
+        if self._weather_enabled and self._weather.is_available:
+            steps_fc = max(1, int(hours_left * 4))
+            forecast_weights = self._weather.get_solar_weights(sunrise_utc, deadline, steps_fc)
+        
         # Calculate solar day span for weighting (from sunrise to deadline)
         day_span = (deadline - sunrise_utc).total_seconds()
         
         if day_span <= 0:
             # Fallback: flat rate if something is off
             required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
+        elif forecast_weights:
+            # --- Forecast-based weighting ---
+            forecast_active = True
+            steps_fc = len(forecast_weights)
+            dt = hours_left / steps_fc
+            now_frac = (now - sunrise_utc).total_seconds() / day_span
+            now_frac = max(0.0, min(1.0, now_frac))
+            
+            # Current weight: interpolate from forecast at now_frac
+            now_idx = int(now_frac * steps_fc)
+            now_idx = min(now_idx, steps_fc - 1)
+            current_weight = max(0.05, forecast_weights[now_idx])
+            
+            # Sum remaining weighted hours (from current position to end)
+            total_weighted_hours = 0.0
+            start_idx = max(0, int(now_frac * steps_fc))
+            for i in range(start_idx, steps_fc):
+                total_weighted_hours += max(0.05, forecast_weights[i]) * dt
+            
+            if total_weighted_hours > 0:
+                required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
+            else:
+                required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
+            
+            # Log forecast influence periodically
+            budget = self._weather.get_remaining_budget_ratio(now, deadline)
+            if budget is not None and not hasattr(self, "_last_weather_log") or \
+               current_time - getattr(self, "_last_weather_log", 0) > 600:
+                self._last_weather_log = current_time
+                print(f"[SUNSET] Forecast active: weight={current_weight:.2f}, "
+                      f"solar budget remaining={budget:.0%}, "
+                      f"cloud={self._weather.get_cloud_cover_at(now) or 0:.0f}%")
         else:
+            # --- Theoretical cos² weighting (fallback) ---
             # Current position as fraction of solar day (0=sunrise, 1=deadline)
             now_frac = (now - sunrise_utc).total_seconds() / day_span
             noon_frac = (peak_utc - sunrise_utc).total_seconds() / day_span
@@ -741,12 +798,13 @@ class DeyeApp(ctk.CTk):
             else:
                 required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
         
-        # Cloudy day compensation: compare rolling PV average to expected curve
+        # Cloudy day compensation (reactive fallback — only when forecast is not active)
+        # When forecast is active, the weight curve already accounts for predicted clouds
         peak_kw = settings.get("peak_expected_kw", 0.0)
         cloud_threshold = settings.get("cloud_threshold_pct", 60) / 100.0
         cloud_max_boost = settings.get("cloud_max_boost", 3.0)
         
-        if peak_kw > 0 and day_span > 0 and len(self._pv_samples) >= 3:
+        if not forecast_active and peak_kw > 0 and day_span > 0 and len(self._pv_samples) >= 3:
             # Expected production at current time from cos² curve (kW)
             expected_kw = peak_kw * solar_weight(now_frac)
             # Rolling average of actual PV production (kW)
@@ -759,8 +817,11 @@ class DeyeApp(ctk.CTk):
                     # At 30% of expected → boost ~2x; at 10% → boost ~3x (capped)
                     self._cloud_boost_factor = min(cloud_max_boost, expected_kw / max(avg_pv_kw, 0.1))
                     required_amps = math.ceil(required_amps * self._cloud_boost_factor)
-                    print(f"[SUNSET] Cloudy boost: PV avg={avg_pv_kw:.1f}kW vs expected={expected_kw:.1f}kW"
-                          f" ({production_ratio:.0%}), boost={self._cloud_boost_factor:.1f}x → {required_amps}A")
+                    required_amps = min(required_amps, deye_config.max_charge_amps_limit)
+                    if required_amps != getattr(self, "_last_cloud_boost_amps", None):
+                        self._last_cloud_boost_amps = required_amps
+                        print(f"[SUNSET] Cloudy boost: PV avg={avg_pv_kw:.1f}kW vs expected={expected_kw:.1f}kW"
+                              f" ({production_ratio:.0%}), boost={self._cloud_boost_factor:.1f}x → {required_amps}A")
                 else:
                     self._cloud_boost_factor = 1.0
             else:
@@ -789,7 +850,7 @@ class DeyeApp(ctk.CTk):
                 if not self._is_charge_speed_settled(data, data.battery_voltage if data.battery_voltage > 0 else 52):
                     self.after(0, lambda: self.sunset_panel.update_state(
                         sunset_str, hours_left, required_amps, self._sunset_active,
-                        self._cloud_boost_factor))
+                        self._cloud_boost_factor, weather_str, sparkline))
                     return
                 
                 self._sunset_boost_amps = sunset_boost
@@ -799,10 +860,11 @@ class DeyeApp(ctk.CTk):
                 target_charge = min(target_charge, deye_config.max_charge_amps_limit)
                 
                 peak_info = f"peak={peak_hour:.1f}h" if peak_hour > 0 else "peak=auto"
+                src_info = "forecast" if forecast_active else peak_info
                 print(f"[SUNSET] Boosting: Base={base_charge}A + Protection={self._protection_boost_amps}A"
                       f" + Sunset={self._sunset_boost_amps}A = {target_charge}A"
                       f" (need {remaining_ah:.0f}Ah in {hours_left:.1f}h, weight={current_weight:.2f},"
-                      f" {peak_info}, SOC {current_soc}%→{target_soc}%)")
+                      f" {src_info}, SOC {current_soc}%→{target_soc}%)")
                 
                 if self.inverter.set_max_charge_current(target_charge):
                     self._current_max_charge = target_charge
@@ -820,7 +882,7 @@ class DeyeApp(ctk.CTk):
         
         self.after(0, lambda: self.sunset_panel.update_state(
             sunset_str, hours_left, required_amps, self._sunset_active,
-            self._cloud_boost_factor))
+            self._cloud_boost_factor, weather_str, sparkline))
 
     def _get_base_charge_amps(self) -> int:
         """Get the base charge amps from schedule or defaults (before protection boost)."""
@@ -1040,7 +1102,13 @@ class DeyeApp(ctk.CTk):
         charger_state = self.ev_charger.get_state()
 
         # Log only on state changes to avoid spam
-        ev_key = (result, detail)
+        # For solar charging, ignore wattage fluctuations — dedup on amps only
+        if result == EVResult.SOLAR_CHARGING:
+            import re
+            m = re.search(r'(\d+)A', detail)
+            ev_key = (result, m.group(1) if m else detail)
+        else:
+            ev_key = (result, detail)
         if ev_key != getattr(self, "_last_ev_key", None):
             self._last_ev_key = ev_key
             if result in (EVResult.CHARGING, EVResult.SOLAR_CHARGING,

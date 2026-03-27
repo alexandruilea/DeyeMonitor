@@ -302,6 +302,8 @@ class SunsetChargingConfig:
     cloud_threshold_pct: int = field(default_factory=lambda: int(os.getenv("SUNSET_CLOUD_THRESHOLD_PCT", "60")))  # Below this % of expected → boost
     cloud_max_boost: float = field(default_factory=lambda: float(os.getenv("SUNSET_CLOUD_MAX_BOOST", "3.0")))  # Maximum boost multiplier
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("SUNSET_CHARGING_ENABLED", "true").lower() == "true")
+    weather_enabled: bool = field(default_factory=lambda: os.getenv("SUNSET_WEATHER_ENABLED", "true").lower() == "true")
+    weather_refresh_hours: float = field(default_factory=lambda: float(os.getenv("SUNSET_WEATHER_REFRESH_HOURS", "3")))
 
 
 def load_default_schedules() -> list:

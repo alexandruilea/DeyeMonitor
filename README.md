@@ -25,7 +25,9 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Offline astronomical calculations via `astral` library (no internet needed)
   - Solar-curve-weighted algorithm (cos²) for production-peak-heavy charging
   - Configurable peak solar hour for non-south-facing panels (or auto = solar noon)
-  - Cloudy day compensation: compares 15-min rolling PV average against expected cos² curve; boosts charging when production drops below threshold
+  - **Weather forecast integration** (Open-Meteo API, free, no API key): fetches hourly shortwave radiation forecast and uses real predicted solar curve instead of theoretical cos² — front-loads charging when afternoon clouds are forecast
+  - Cloudy day compensation (reactive fallback when no forecast): compares 15-min rolling PV average against expected cos² curve; boosts charging when production drops below threshold
+  - Graceful fallback: if API is unreachable, reverts to the reactive cos² algorithm automatically
   - Configurable target SOC, buffer time, and battery capacity
   - 10A step rounding and throttled writes to avoid excessive register writes
   - Automatically coordinates with battery boost protection (protection yields when sunset charging is active)
@@ -181,19 +183,21 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 #### Sunset Charging Settings
 
-| Variable                     | Description                                                           | Default |
-| ---------------------------- | --------------------------------------------------------------------- | ------- |
-| `SOLAR_LATITUDE`             | Your location latitude                                                | 47.00   |
-| `SOLAR_LONGITUDE`            | Your location longitude                                               | 22.00   |
-| `BATTERY_CAPACITY_AH`        | Total battery capacity in Amp-hours                                   | 600     |
-| `SUNSET_TARGET_SOC`          | Target SOC to reach by sunset (%)                                     | 100     |
-| `SUNSET_BUFFER_MINUTES`      | Finish charging this many minutes before sunset                       | 60      |
-| `SUNSET_MIN_CHARGE_AMPS`     | Minimum charge rate when sunset charging is active                    | 10      |
-| `SUNSET_PEAK_SOLAR_HOUR`     | Peak solar production hour in local time (e.g. 13.5); 0 = auto (noon) | 0       |
-| `SUNSET_PEAK_EXPECTED_KW`    | Peak clear-sky PV output in kW (e.g. 14); 0 = no cloudy compensation  | 0       |
-| `SUNSET_CLOUD_THRESHOLD_PCT` | Below this % of expected PV → apply cloudy boost                      | 60      |
-| `SUNSET_CLOUD_MAX_BOOST`     | Maximum cloudy-day boost multiplier                                   | 3.0     |
-| `SUNSET_CHARGING_ENABLED`    | Enable sunset-aware charging at startup (true/false)                  | true    |
+| Variable                       | Description                                                           | Default |
+| ------------------------------ | --------------------------------------------------------------------- | ------- |
+| `SOLAR_LATITUDE`               | Your location latitude                                                | 47.00   |
+| `SOLAR_LONGITUDE`              | Your location longitude                                               | 22.00   |
+| `BATTERY_CAPACITY_AH`          | Total battery capacity in Amp-hours                                   | 600     |
+| `SUNSET_TARGET_SOC`            | Target SOC to reach by sunset (%)                                     | 100     |
+| `SUNSET_BUFFER_MINUTES`        | Finish charging this many minutes before sunset                       | 60      |
+| `SUNSET_MIN_CHARGE_AMPS`       | Minimum charge rate when sunset charging is active                    | 10      |
+| `SUNSET_PEAK_SOLAR_HOUR`       | Peak solar production hour in local time (e.g. 13.5); 0 = auto (noon) | 0       |
+| `SUNSET_PEAK_EXPECTED_KW`      | Peak clear-sky PV output in kW (e.g. 14); 0 = no cloudy compensation  | 0       |
+| `SUNSET_CLOUD_THRESHOLD_PCT`   | Below this % of expected PV → apply cloudy boost                      | 60      |
+| `SUNSET_CLOUD_MAX_BOOST`       | Maximum cloudy-day boost multiplier                                   | 3.0     |
+| `SUNSET_CHARGING_ENABLED`      | Enable sunset-aware charging at startup (true/false)                  | true    |
+| `SUNSET_WEATHER_ENABLED`       | Use Open-Meteo forecast for predictive charging (true/false)          | true    |
+| `SUNSET_WEATHER_REFRESH_HOURS` | How often to refresh the weather forecast (hours)                     | 3       |
 
 #### Tapo Smart Plug Outlets
 

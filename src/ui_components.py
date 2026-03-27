@@ -1345,8 +1345,8 @@ class SunsetChargingPanel(ctk.CTkFrame):
         
         # State display
         state_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
-        state_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
-        state_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        state_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+        state_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
         
         self.lbl_sunset_time = ctk.CTkLabel(
             state_frame, text="Sunset: --:--",
@@ -1364,7 +1364,26 @@ class SunsetChargingPanel(ctk.CTkFrame):
             state_frame, text="Required: --A",
             font=("Roboto", 11, "bold"), text_color="#3498DB"
         )
-        self.lbl_required_amps.grid(row=0, column=2, padx=10, pady=5, sticky="e")
+        self.lbl_required_amps.grid(row=0, column=2, padx=10, pady=5)
+        
+        self.lbl_weather = ctk.CTkLabel(
+            state_frame, text="",
+            font=("Roboto", 10), text_color="#95A5A6"
+        )
+        self.lbl_weather.grid(row=0, column=3, padx=10, pady=5, sticky="e")
+        
+        # Weather forecast row (hourly icons)
+        self.weather_bar_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        self.weather_bar_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.weather_bar_frame.grid_columnconfigure(0, weight=1)
+        
+        self.lbl_sparkline = ctk.CTkLabel(
+            self.weather_bar_frame, text="",
+            font=("Segoe UI Emoji", 22), text_color="#F39C12",
+            anchor="w"
+        )
+        self.lbl_sparkline.grid(row=0, column=0, padx=10, pady=4, sticky="ew")
+        self.weather_bar_frame.grid_remove()  # Hidden until data arrives
     
     def _on_enable_toggle(self) -> None:
         """Handle enable/disable toggle."""
@@ -1423,7 +1442,7 @@ class SunsetChargingPanel(ctk.CTkFrame):
             }
     
     def update_state(self, sunset_str: str, hours_left: float, required_amps: int, active: bool,
-                      cloud_boost: float = 1.0) -> None:
+                      cloud_boost: float = 1.0, weather_str: str = "", sparkline: str = "") -> None:
         """Update the state display labels."""
         self.lbl_sunset_time.configure(text=f"Sunset: {sunset_str}")
         
@@ -1443,6 +1462,17 @@ class SunsetChargingPanel(ctk.CTkFrame):
             self.lbl_required_amps.configure(text=f"Required: {required_amps}A{cloud_str}", text_color=color)
         else:
             self.lbl_required_amps.configure(text="Standby", text_color="gray")
+        
+        if weather_str:
+            self.lbl_weather.configure(text=weather_str, text_color="#3498DB")
+        else:
+            self.lbl_weather.configure(text="", text_color="#95A5A6")
+        
+        if sparkline:
+            self.lbl_sparkline.configure(text=sparkline)
+            self.weather_bar_frame.grid()
+        else:
+            self.weather_bar_frame.grid_remove()
 
 
 class EVChargerPanel(ctk.CTkFrame):
