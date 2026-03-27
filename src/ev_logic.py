@@ -234,22 +234,27 @@ class EVChargingLogic:
                        ) -> Tuple[EVResult, str]:
         """Calculate target amps from surplus solar power.
         
-        Uses PV production minus total house consumption as the true solar
-        surplus. This correctly accounts for all loads (heat pump, lights,
-        etc.) and doesn't need to "add back" the charger's own draw since
-        pv_power is measured at the panels, independent of where power flows.
+        Uses grid export as the ground truth for surplus:
+          surplus = current_charger_watts + grid_export
+        
+        When the charger is drawing power, that draw is already reflected
+        in the grid meter — so we add it back to see the *available*
+        solar for charging.  Grid export (negative grid_power) tells us
+        how much extra is being pushed to the grid on top of that.
+        
+        This avoids estimating household loads entirely and works
+        regardless of which phase the charger is on.
         """
-        total_consumption = sum(data.total_loads)
-        surplus_watts = max(0, data.pv_power - total_consumption)
-        # Add back what the charger is already consuming — its draw is included
-        # in total_loads, but it IS available solar capacity we can keep using.
-        # Cap the add-back to actual PV power so the charger can't sustain
-        # itself from battery/grid when there's no solar.
-        if charger_state.is_on:
-            charger_draw = charger_state.current_amps * 230
-            surplus_watts += min(charger_draw, data.pv_power)
+        # grid_power: positive = importing, negative = exporting
+        # Surplus = what the charger already draws + what's being exported
+        # (or minus what's being imported). This reacts to grid import too,
+        # so if grid goes +2000W we reduce the charger accordingly.
+        avg_voltage = sum(data.voltages) / len(data.voltages) if data.voltages else 230.0
+        charger_watts = charger_state.current_amps * avg_voltage if charger_state.is_charging else 0
 
-        target_amps = max(settings.min_amps, min(int(surplus_watts / 230), settings.max_amps))
+        surplus_watts = max(0, int(charger_watts - data.grid_power))
+
+        target_amps = max(settings.min_amps, min(int(surplus_watts / avg_voltage), settings.max_amps))
 
         if target_amps < settings.min_amps:
             # Not enough solar to run at minimum amps
