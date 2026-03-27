@@ -1278,10 +1278,9 @@ class DeyeApp(ctk.CTk):
         result, detail = self.hp_logic.process(settings, data.grid_power, data.soc, data.voltages)
         hp_state = self.hp_manager.get_state()
 
-        # Log on state changes
-        hp_key = (result, detail)
-        if hp_key != getattr(self, "_last_hp_key", None):
-            self._last_hp_key = hp_key
+        # Log only on state transitions (ignore detail changes within the same state)
+        if result != getattr(self, "_last_hp_result", None):
+            self._last_hp_result = result
             if result in (HeatpumpResult.SCHEDULE_ACTIVE, HeatpumpResult.SOLAR_OVERRIDE,
                           HeatpumpResult.SOC_OVERRIDE, HeatpumpResult.HV_OVERRIDE,
                           HeatpumpResult.LV_SHUTDOWN, HeatpumpResult.SOC_LOW,
