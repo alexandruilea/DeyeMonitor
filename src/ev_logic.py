@@ -242,9 +242,12 @@ class EVChargingLogic:
         total_consumption = sum(data.total_loads)
         surplus_watts = max(0, data.pv_power - total_consumption)
         # Add back what the charger is already consuming — its draw is included
-        # in total_loads, but it IS available solar capacity we can keep using
+        # in total_loads, but it IS available solar capacity we can keep using.
+        # Cap the add-back to actual PV power so the charger can't sustain
+        # itself from battery/grid when there's no solar.
         if charger_state.is_on:
-            surplus_watts += charger_state.current_amps * 230
+            charger_draw = charger_state.current_amps * 230
+            surplus_watts += min(charger_draw, data.pv_power)
 
         target_amps = max(settings.min_amps, min(int(surplus_watts / 230), settings.max_amps))
 
