@@ -7,6 +7,7 @@ the sunset algorithm can front-load charging in the morning.
 """
 from __future__ import annotations
 import json
+import math
 import ssl
 import time
 import threading
@@ -22,6 +23,7 @@ class HourlyForecast:
     hour_utc: datetime
     shortwave_radiation: float  # W/m² (direct + diffuse on horizontal surface)
     cloud_cover: float  # 0-100 %
+    shortwave_radiation_clear_sky: float = 0.0  # W/m² theoretical max (no clouds)
 
 
 @dataclass
@@ -78,6 +80,7 @@ class WeatherForecast:
             f"?latitude={self.latitude:.4f}"
             f"&longitude={self.longitude:.4f}"
             f"&hourly=shortwave_radiation,cloud_cover"
+            f"&models=icon_eu"
             f"&forecast_days=1"
             f"&timezone=UTC"
         )
@@ -119,10 +122,15 @@ class WeatherForecast:
             entries = []
             for i, t_str in enumerate(times):
                 dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
+                cs_ghi = self._clear_sky_ghi(
+                    dt - timedelta(minutes=30),  # API value = preceding hour mean
+                    self.latitude, self.longitude,
+                )
                 entries.append(HourlyForecast(
                     hour_utc=dt,
                     shortwave_radiation=radiation[i] if radiation[i] is not None else 0.0,
                     cloud_cover=cloud[i] if i < len(cloud) and cloud[i] is not None else 0.0,
+                    shortwave_radiation_clear_sky=cs_ghi,
                 ))
 
             with self._lock:
@@ -153,6 +161,10 @@ class WeatherForecast:
                 if entry.hour_utc <= dt_utc < entry.hour_utc + timedelta(hours=1):
                     return entry.cloud_cover
         return None
+
+    def get_clear_sky_at(self, dt_utc: datetime) -> float:
+        """Get computed clear-sky GHI (W/m²) for any time. No lock needed — pure math."""
+        return self._clear_sky_ghi(dt_utc, self.latitude, self.longitude)
 
     def get_solar_weights(
         self, sunrise_utc: datetime, deadline_utc: datetime, steps: int = 24
@@ -192,6 +204,36 @@ class WeatherForecast:
             if peak <= 0:
                 return []
             return [w / peak for w in weights]
+
+    def get_day_solar_quality(
+        self, now_utc: datetime, deadline_utc: datetime
+    ) -> float | None:
+        """
+        Ratio of forecast radiation to clear-sky radiation from now to deadline.
+
+        Returns 0.0–1.0 where 1.0 = perfect clear sky, 0.0 = fully overcast.
+        Returns None if clear-sky data is unavailable.
+
+        Used to decide charging strategy:
+        - High quality (clear day): follow solar curve, keep battery room for
+          midday clipping when production exceeds grid export.
+        - Low quality (cloudy day): flatten charging curve, front-load because
+          there won't be midday surplus to capture.
+        """
+        with self._lock:
+            if not self._hourly:
+                return None
+
+            total_forecast = 0.0
+            total_clear_sky = 0.0
+            for entry in self._hourly:
+                if entry.hour_utc >= now_utc and entry.hour_utc < deadline_utc:
+                    total_forecast += max(entry.shortwave_radiation, 0.0)
+                    total_clear_sky += max(entry.shortwave_radiation_clear_sky, 0.0)
+
+            if total_clear_sky <= 0:
+                return None
+            return min(1.0, total_forecast / total_clear_sky)
 
     def get_remaining_budget_ratio(
         self, now_utc: datetime, deadline_utc: datetime
@@ -266,13 +308,13 @@ class WeatherForecast:
             if not self._hourly:
                 return ""
 
-            # Build mapping: local_hour -> (radiation, cloud_cover)
+            # Build mapping: local_hour -> (radiation, clear_sky_radiation)
             hour_data: dict[int, tuple[float, float]] = {}
             for entry in self._hourly:
                 local_dt = entry.hour_utc.astimezone()
                 h = local_dt.hour
                 if start_local_hour <= h <= end_local_hour:
-                    hour_data[h] = (entry.shortwave_radiation, entry.cloud_cover)
+                    hour_data[h] = (entry.shortwave_radiation, entry.shortwave_radiation_clear_sky)
 
             if not hour_data:
                 return ""
@@ -281,8 +323,8 @@ class WeatherForecast:
 
             parts: list[str] = []
             for h in range(start_local_hour, end_local_hour + 1):
-                rad, cloud = hour_data.get(h, (0.0, 100.0))
-                icon = self._weather_icon(rad, cloud)
+                rad, clear_sky_rad = hour_data.get(h, (0.0, 0.0))
+                icon = self._weather_icon(rad, clear_sky_rad)
                 label = f"{h:02d}"
                 if h == now_local_hour:
                     parts.append(f"[{label}{icon}]")
@@ -292,16 +334,59 @@ class WeatherForecast:
             return " ".join(parts)
 
     @staticmethod
-    def _weather_icon(radiation: float, cloud_cover: float) -> str:
-        """Pick a weather icon based on radiation and cloud cover."""
+    def _clear_sky_ghi(dt_utc: datetime, latitude: float, longitude: float) -> float:
+        """
+        Compute theoretical clear-sky Global Horizontal Irradiance (W/m²).
+
+        Uses the Haurwitz (1945) model: GHI = 1098 × sin(α) × exp(-0.057 / sin(α))
+        where α is the solar altitude angle. Simple, no dependencies, accurate
+        enough for ratio-based comparisons (actual / clear_sky).
+        """
+        # Day of year
+        doy = dt_utc.timetuple().tm_yday
+
+        # Solar declination (Spencer, 1971)
+        B = 2 * math.pi * (doy - 1) / 365.0
+        decl = (0.006918 - 0.399912 * math.cos(B) + 0.070257 * math.sin(B)
+                - 0.006758 * math.cos(2 * B) + 0.000907 * math.sin(2 * B)
+                - 0.002697 * math.cos(3 * B) + 0.00148 * math.sin(3 * B))
+
+        # Equation of time (minutes) — corrects for Earth's orbital eccentricity
+        eot = (229.18 * (0.000075 + 0.001868 * math.cos(B)
+               - 0.032077 * math.sin(B)
+               - 0.014615 * math.cos(2 * B)
+               - 0.04089 * math.sin(2 * B)))
+
+        # True solar time
+        utc_minutes = dt_utc.hour * 60.0 + dt_utc.minute
+        solar_time_min = utc_minutes + eot + 4.0 * longitude  # 4 min per degree
+        hour_angle = math.radians((solar_time_min / 4.0) - 180.0)  # 1° per 4 min
+
+        # Solar altitude angle
+        lat_rad = math.radians(latitude)
+        sin_alt = (math.sin(lat_rad) * math.sin(decl)
+                   + math.cos(lat_rad) * math.cos(decl) * math.cos(hour_angle))
+
+        if sin_alt <= 0:
+            return 0.0  # Sun below horizon
+
+        # Haurwitz clear-sky model
+        return 1098.0 * sin_alt * math.exp(-0.057 / sin_alt)
+
+    @staticmethod
+    def _weather_icon(radiation: float, clear_sky_radiation: float) -> str:
+        """Pick a weather icon based on radiation ratio (actual / clear-sky max)."""
         if radiation < 10:
             return "\U0001F319"        # 🌙 night / no sun
-        if cloud_cover < 20:
-            return "\u2600\uFE0F"      # ☀️ clear (variation selector → color)
-        if cloud_cover < 40:
+        if clear_sky_radiation < 50:
+            return "\U0001F319"        # 🌙 dawn/dusk (too low for meaningful ratio)
+        ratio = radiation / clear_sky_radiation
+        if ratio > 0.80:
+            return "\u2600\uFE0F"      # ☀️ clear
+        if ratio > 0.60:
             return "\U0001F324\uFE0F"  # 🌤️ mostly sunny
-        if cloud_cover < 70:
+        if ratio > 0.40:
             return "\u26C5"            # ⛅ partly cloudy
-        if cloud_cover < 90:
+        if ratio > 0.20:
             return "\U0001F325\uFE0F"  # 🌥️ mostly cloudy
-        return "\u2601\uFE0F"          # ☁️ overcast (variation selector → color)
+        return "\u2601\uFE0F"          # ☁️ overcast

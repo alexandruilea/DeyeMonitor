@@ -127,7 +127,7 @@ class DeyeApp(ctk.CTk):
         self._sunset_boost_amps = 0  # Current sunset boost amount
         self._sunset_active = False  # Whether sunset charging is actively boosting
         self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
-        self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling window
+        self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling 60-min window
         self._cloud_boost_factor = 1.0  # Current cloudy day boost multiplier
         
         # Weather forecast for predictive sunset charging
@@ -634,10 +634,9 @@ class DeyeApp(ctk.CTk):
         in the early morning and late afternoon. The weighting follows a cosine
         curve from sunrise to the deadline, peaking at the configured hour.
         
-        Cloudy day compensation: when peak_expected_kw is configured, compares
-        a 15-minute rolling average of actual PV production against the expected
-        cos² curve. If production is below the threshold, applies a boost
-        multiplier to charge faster and compensate for reduced solar.
+        Bad day detection: compares actual PV production (rolling 15-min avg)
+        against clear-sky GHI model. When actual < 50% of clear-sky potential,
+        switches to max charge rate to capture every available watt.
         """
         from astral import LocationInfo
         from astral.sun import sun
@@ -656,9 +655,9 @@ class DeyeApp(ctk.CTk):
         # Throttle adjustments to avoid excessive inverter writes
         current_time = time.time()
 
-        # Track PV production samples (rolling 15-min window) for cloudy day detection
+        # Track PV production samples (rolling 60-min window) for real-time quality
         self._pv_samples.append((current_time, data.pv_power))
-        cutoff = current_time - 900  # 15 minutes
+        cutoff = current_time - 3600  # 60 minutes
         self._pv_samples = [(t, w) for t, w in self._pv_samples if t >= cutoff]
 
         if current_time - self._last_sunset_adjustment < deye_config.min_register_write_interval:
@@ -745,89 +744,111 @@ class DeyeApp(ctk.CTk):
             now_frac = (now - sunrise_utc).total_seconds() / day_span
             now_frac = max(0.0, min(1.0, now_frac))
             
-            # Current weight: interpolate from forecast at now_frac
-            now_idx = int(now_frac * steps_fc)
-            now_idx = min(now_idx, steps_fc - 1)
-            current_weight = max(0.05, forecast_weights[now_idx])
-            
-            # Sum remaining weighted hours (from current position to end)
-            total_weighted_hours = 0.0
-            start_idx = max(0, int(now_frac * steps_fc))
-            for i in range(start_idx, steps_fc):
-                total_weighted_hours += max(0.05, forecast_weights[i]) * dt
-            
-            if total_weighted_hours > 0:
-                required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
+            # Day solar quality from TWO signals (use the WORSE one):
+            #  1. Forecast quality: forecast radiation / clear-sky → can see ahead
+            #     (detects predicted cloudy afternoons even when morning is sunny)
+            #  2. Real-time PV quality: actual PV output / clear-sky → catches wrong forecasts
+            #     (detects reality when forecast is overly optimistic)
+            forecast_quality = self._weather.get_day_solar_quality(now, deadline)
+            if forecast_quality is None:
+                forecast_quality = 1.0
+
+            # Real-time PV quality from rolling 60-min window
+            clear_sky_now_kw = self._weather.get_clear_sky_at(now) / 1000.0 if self._weather_enabled else 0.0
+            pv_quality = 1.0
+            if clear_sky_now_kw > 0.3 and len(self._pv_samples) >= 3:
+                avg_pv_kw = sum(w for _, w in self._pv_samples) / len(self._pv_samples) / 1000.0
+                pv_quality = min(1.0, avg_pv_kw / clear_sky_now_kw)
+
+            # Use the worse signal — if EITHER source says bad day, charge aggressively
+            day_quality = min(forecast_quality, pv_quality)
+
+            # Below this threshold, don't bother shaping — charge at max
+            if day_quality < 0.6:
+                required_amps = deye_config.max_charge_amps_limit
+                self._cloud_boost_factor = 1.0 / max(day_quality, 0.05)
+
+                if required_amps != getattr(self, "_last_cloud_boost_amps", None):
+                    self._last_cloud_boost_amps = required_amps
+                    src = "PV" if pv_quality < forecast_quality else "forecast"
+                    print(f"[SUNSET] Bad day ({src}): forecast_q={forecast_quality:.0%}, "
+                          f"pv_q={pv_quality:.0%} → max charge {required_amps}A")
             else:
-                required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
+                self._cloud_boost_factor = 1.0
+                self._last_cloud_boost_amps = None
+
+                # Blend weights: quality=1.0 → pure forecast curve, quality=0.0 → flat
+                adjusted_weights = [
+                    day_quality * w + (1.0 - day_quality) * 1.0
+                    for w in forecast_weights
+                ]
+
+                # Current weight: interpolate from adjusted weights at now_frac
+                now_idx = int(now_frac * steps_fc)
+                now_idx = min(now_idx, steps_fc - 1)
+                current_weight = max(0.05, adjusted_weights[now_idx])
+
+                # Sum remaining weighted hours (from current position to end)
+                total_weighted_hours = 0.0
+                start_idx = max(0, int(now_frac * steps_fc))
+                for i in range(start_idx, steps_fc):
+                    total_weighted_hours += max(0.05, adjusted_weights[i]) * dt
+
+                if total_weighted_hours > 0:
+                    required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
+                else:
+                    required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
             
             # Log forecast influence periodically
             budget = self._weather.get_remaining_budget_ratio(now, deadline)
             if budget is not None and not hasattr(self, "_last_weather_log") or \
                current_time - getattr(self, "_last_weather_log", 0) > 600:
                 self._last_weather_log = current_time
-                print(f"[SUNSET] Forecast active: weight={current_weight:.2f}, "
-                      f"solar budget remaining={budget:.0%}, "
-                      f"cloud={self._weather.get_cloud_cover_at(now) or 0:.0f}%")
+                print(f"[SUNSET] Forecast active: day_q={day_quality:.0%} "
+                      f"(fc={forecast_quality:.0%}, pv={pv_quality:.0%}), "
+                      f"solar budget remaining={budget:.0%}")
         else:
-            # --- Theoretical cos² weighting (fallback) ---
-            # Current position as fraction of solar day (0=sunrise, 1=deadline)
+            # --- Theoretical cos² weighting (fallback when no forecast) ---
             now_frac = (now - sunrise_utc).total_seconds() / day_span
             noon_frac = (peak_utc - sunrise_utc).total_seconds() / day_span
             now_frac = max(0.0, min(1.0, now_frac))
             
-            # Weight at current time: cos²(π × (t - peak_frac))
-            # Peaks at configured peak hour (or solar noon), tapers to ~0 at edges
             def solar_weight(t_frac):
                 angle = math.pi * (t_frac - noon_frac)
-                return max(0.05, math.cos(angle) ** 2)  # Floor of 0.05 to avoid zero
-            
-            # Integrate remaining weighted hours from now to deadline using 15-min steps
-            steps = max(1, int(hours_left * 4))
-            dt = hours_left / steps
-            total_weighted_hours = 0.0
-            for i in range(steps):
-                t = now_frac + (i + 0.5) * (1.0 - now_frac) / steps
-                total_weighted_hours += solar_weight(t) * dt
-            
-            # Current weight determines how much of the remaining Ah to charge now
-            current_weight = solar_weight(now_frac)
-            
-            if total_weighted_hours > 0:
-                required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
-            else:
-                required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
-        
-        # Cloudy day compensation (reactive fallback — only when forecast is not active)
-        # When forecast is active, the weight curve already accounts for predicted clouds
-        peak_kw = settings.get("peak_expected_kw", 0.0)
-        cloud_threshold = settings.get("cloud_threshold_pct", 60) / 100.0
-        cloud_max_boost = settings.get("cloud_max_boost", 3.0)
-        
-        if not forecast_active and peak_kw > 0 and day_span > 0 and len(self._pv_samples) >= 3:
-            # Expected production at current time from cos² curve (kW)
-            expected_kw = peak_kw * solar_weight(now_frac)
-            # Rolling average of actual PV production (kW)
-            avg_pv_kw = sum(w for _, w in self._pv_samples) / len(self._pv_samples) / 1000.0
-            
-            if expected_kw > 0.5:  # Only compensate when meaningful production is expected
-                production_ratio = avg_pv_kw / expected_kw
-                if production_ratio < cloud_threshold:
-                    # Scale boost inversely with production ratio
-                    # At 30% of expected → boost ~2x; at 10% → boost ~3x (capped)
-                    self._cloud_boost_factor = min(cloud_max_boost, expected_kw / max(avg_pv_kw, 0.1))
-                    required_amps = math.ceil(required_amps * self._cloud_boost_factor)
-                    required_amps = min(required_amps, deye_config.max_charge_amps_limit)
-                    if required_amps != getattr(self, "_last_cloud_boost_amps", None):
-                        self._last_cloud_boost_amps = required_amps
-                        print(f"[SUNSET] Cloudy boost: PV avg={avg_pv_kw:.1f}kW vs expected={expected_kw:.1f}kW"
-                              f" ({production_ratio:.0%}), boost={self._cloud_boost_factor:.1f}x → {required_amps}A")
-                else:
-                    self._cloud_boost_factor = 1.0
+                return max(0.05, math.cos(angle) ** 2)
+
+            # Real-time PV quality check (without forecast, this is our only signal)
+            clear_sky_now_kw = self._weather.get_clear_sky_at(now) / 1000.0 if self._weather_enabled else 0.0
+            pv_quality = 1.0
+            if clear_sky_now_kw > 0.3 and len(self._pv_samples) >= 3:
+                avg_pv_kw = sum(w for _, w in self._pv_samples) / len(self._pv_samples) / 1000.0
+                pv_quality = min(1.0, avg_pv_kw / clear_sky_now_kw)
+
+            if pv_quality < 0.6:
+                # Bad day detected from actual PV — charge at max
+                required_amps = deye_config.max_charge_amps_limit
+                self._cloud_boost_factor = 1.0 / max(pv_quality, 0.05)
+                if required_amps != getattr(self, "_last_cloud_boost_amps", None):
+                    self._last_cloud_boost_amps = required_amps
+                    print(f"[SUNSET] Bad day (PV, no forecast): pv_q={pv_quality:.0%} "
+                          f"→ max charge {required_amps}A")
             else:
                 self._cloud_boost_factor = 1.0
-        else:
-            self._cloud_boost_factor = 1.0
+                self._last_cloud_boost_amps = None
+
+                steps = max(1, int(hours_left * 4))
+                dt = hours_left / steps
+                total_weighted_hours = 0.0
+                for i in range(steps):
+                    t = now_frac + (i + 0.5) * (1.0 - now_frac) / steps
+                    total_weighted_hours += solar_weight(t) * dt
+
+                current_weight = solar_weight(now_frac)
+
+                if total_weighted_hours > 0:
+                    required_amps = math.ceil(remaining_ah * current_weight / total_weighted_hours)
+                else:
+                    required_amps = math.ceil(remaining_ah / max(hours_left, 0.1))
         
         required_amps = max(min_charge, min(required_amps, deye_config.max_charge_amps_limit))
         
@@ -860,7 +881,7 @@ class DeyeApp(ctk.CTk):
                 target_charge = min(target_charge, deye_config.max_charge_amps_limit)
                 
                 peak_info = f"peak={peak_hour:.1f}h" if peak_hour > 0 else "peak=auto"
-                src_info = "forecast" if forecast_active else peak_info
+                src_info = f"forecast q={day_quality:.0%}" if forecast_active else peak_info
                 print(f"[SUNSET] Boosting: Base={base_charge}A + Protection={self._protection_boost_amps}A"
                       f" + Sunset={self._sunset_boost_amps}A = {target_charge}A"
                       f" (need {remaining_ah:.0f}Ah in {hours_left:.1f}h, weight={current_weight:.2f},"
