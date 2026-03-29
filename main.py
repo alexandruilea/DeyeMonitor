@@ -767,6 +767,7 @@ class DeyeApp(ctk.CTk):
             if day_quality < 0.6:
                 required_amps = deye_config.max_charge_amps_limit
                 self._cloud_boost_factor = 1.0 / max(day_quality, 0.05)
+                current_weight = 1.0  # Flat weight in bad-day mode
 
                 if required_amps != getattr(self, "_last_cloud_boost_amps", None):
                     self._last_cloud_boost_amps = required_amps
