@@ -205,6 +205,7 @@ class EVChargerConfig:
     grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_GRID_CHARGE_AMPS", "20")))  # Amps to use when grid-charging EV
     solar_ramp_down_delay: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_SOLAR_RAMP_DOWN_DELAY", "5")))  # Minutes between solar ramp-down steps
     solar_amp_steps: tuple = field(default_factory=lambda: tuple(int(x) for x in os.getenv("EV_CHARGER_SOLAR_AMP_STEPS", "8,16,24,32").split(",")))
+    ev_first: bool = field(default_factory=lambda: os.getenv("EV_CHARGER_EV_FIRST", "false").lower() == "true")
     # Tuya DPS mapping (varies by charger model)
     dp_switch: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_SWITCH", "1")))
     dp_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS", "6")))

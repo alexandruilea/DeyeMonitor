@@ -829,6 +829,7 @@ class DeyeApp(ctk.CTk):
                 # Bad day detected from actual PV — charge at max
                 required_amps = deye_config.max_charge_amps_limit
                 self._cloud_boost_factor = 1.0 / max(pv_quality, 0.05)
+                current_weight = 1.0  # Flat weight in bad-day mode
                 if required_amps != getattr(self, "_last_cloud_boost_amps", None):
                     self._last_cloud_boost_amps = required_amps
                     print(f"[SUNSET] Bad day (PV, no forecast): pv_q={pv_quality:.0%} "
@@ -1118,6 +1119,7 @@ class DeyeApp(ctk.CTk):
             grid_charge_amps=ui_settings.get("grid_charge_amps", 20),
             solar_ramp_down_delay=ui_settings.get("solar_ramp_down_delay", 5),
             solar_amp_steps=ui_settings.get("solar_amp_steps", (8, 16, 24, 32)),
+            ev_first=ui_settings.get("ev_first", False),
         )
 
         result, detail = self.ev_logic.process(data, settings)

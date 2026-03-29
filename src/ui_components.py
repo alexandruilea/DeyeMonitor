@@ -1588,7 +1588,7 @@ class EVChargerPanel(ctk.CTkFrame):
         self.grid_charge_amps.insert(0, str(ev_charger_config.grid_charge_amps))
         ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=1, column=12, padx=(0, 10), pady=8)
 
-        # ── Settings row 3: solar ramp-down ─────────────────────────
+        # ── Settings row 3: solar ramp-down + priority + step-down sustain
         ctk.CTkLabel(sf, text="Ramp ↓ delay:", font=("Roboto", 10),
                       text_color="#95A5A6").grid(row=2, column=0, padx=(10, 5), pady=8, sticky="w")
         self.ramp_down_delay = ctk.CTkEntry(sf, width=50, justify="center")
@@ -1602,6 +1602,20 @@ class EVChargerPanel(ctk.CTkFrame):
         self.amp_steps.grid(row=2, column=4, columnspan=3, padx=5, pady=8)
         self.amp_steps.insert(0, ",".join(str(s) for s in ev_charger_config.solar_amp_steps))
         ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=2, column=7, padx=(0, 10), pady=8)
+
+        # Priority slider: Battery First ↔ EV First
+        ctk.CTkLabel(sf, text="Battery First", font=("Roboto", 10, "bold"),
+                      text_color="#F39C12").grid(row=2, column=8, padx=(15, 2), pady=8, sticky="e")
+        self.ev_first_var = ctk.BooleanVar(value=ev_charger_config.ev_first)
+        self.ev_first_switch = ctk.CTkSwitch(
+            sf, text="EV First", variable=self.ev_first_var,
+            font=("Roboto", 10, "bold"), text_color="#1ABC9C",
+        )
+        self.ev_first_switch.grid(row=2, column=9, columnspan=2, padx=2, pady=8, sticky="w")
+        if ev_charger_config.ev_first:
+            self.ev_first_switch.select()
+
+
 
         # ── Live state display ──────────────────────────────────────
         state = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -1670,6 +1684,7 @@ class EVChargerPanel(ctk.CTkFrame):
                 "grid_charge_amps": int(self.grid_charge_amps.get()),
                 "solar_ramp_down_delay": int(self.ramp_down_delay.get()),
                 "solar_amp_steps": tuple(int(x.strip()) for x in self.amp_steps.get().split(",")),
+                "ev_first": self.ev_first_var.get(),
             }
         except (ValueError, TypeError):
             return {
@@ -1685,6 +1700,7 @@ class EVChargerPanel(ctk.CTkFrame):
                 "grid_charge_amps": ev_charger_config.grid_charge_amps,
                 "solar_ramp_down_delay": ev_charger_config.solar_ramp_down_delay,
                 "solar_amp_steps": ev_charger_config.solar_amp_steps,
+                "ev_first": False,
             }
     def update_ev_state(self, connected: bool, is_on: bool, charging: bool,
                         error_state: str, current_amps: int, result_text: str,
