@@ -414,6 +414,19 @@ class DeyeInverter:
         mode = max(0, min(2, mode))
         return self._write_register(142, mode)
 
+    def set_solar_sell(self, enabled: bool) -> bool:
+        """
+        Enable or disable solar sell (register 145).
+        Forces the write immediately, bypassing the throttle.
+        
+        Args:
+            enabled: True to enable solar sell, False to disable
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        return self._write_register(deye_config.reg_solar_sell_slot1, 1 if enabled else 0, force=True)
+
     def set_max_sell_power(self, watts: int) -> bool:
         """
         Set the maximum grid sell power (register 143).

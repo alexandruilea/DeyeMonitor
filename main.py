@@ -127,6 +127,10 @@ class DeyeApp(ctk.CTk):
         self._sunset_boost_amps = 0  # Current sunset boost amount
         self._sunset_active = False  # Whether sunset charging is actively boosting
         self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
+
+        # Anti-export leakage: force zero-export when inverter ignores charge setting
+        self._export_leak_forced_zero_export = False  # Whether we forced zero-export mode
+        self._export_leak_original_mode = None  # Work mode to restore when condition clears
         self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling 60-min window
         self._cloud_boost_factor = 1.0  # Current cloudy day boost multiplier
         
@@ -938,6 +942,13 @@ class DeyeApp(ctk.CTk):
         expected_power = self._current_max_charge * battery_voltage
         actual_power = abs(data.battery_power)
         
+        # Cap expected power at available generation — the inverter can't charge
+        # faster than what's available. Includes PV + AC-coupled inverter output
+        # (which appears as negative grid power / export).
+        available_power = data.pv_power + abs(min(0, data.grid_power))
+        if available_power > 0:
+            expected_power = min(expected_power, available_power)
+        
         # Check if actual power is within 10% of expected
         if abs(actual_power - expected_power) > expected_power * 0.10:
             print(f"[CHARGE] Waiting for inverter to settle: actual={actual_power}W vs expected={expected_power:.0f}W "
@@ -1099,6 +1110,83 @@ class DeyeApp(ctk.CTk):
             self._protection_active, self._protection_boost_amps
         ))
 
+    def _process_export_leak_protection(self, data: InverterData) -> None:
+        """Force zero-export mode when the inverter leaks power to grid despite a high charge setting.
+        
+        Detects the condition where:
+        - SOC < 80%
+        - Max charge is set high (>=80% of limit)
+        - Inverter is barely charging the battery (<20% of expected power)
+        - Power is being exported to grid (grid_power < -500W)
+        
+        When triggered, switches to zero-export mode. Restores previous mode
+        when the condition clears (battery charging properly or SOC >= 80%).
+        """
+        soc_threshold = 80
+        charge_utilization_pct = 20  # actual vs expected
+        min_export_w = 500  # ignore trivial export
+        min_charge_setting_pct = 80  # only act when charge setting is high
+
+        battery_voltage = data.battery_voltage if data.battery_voltage > 0 else 52.0
+        is_exporting = data.grid_power < -min_export_w
+        charge_setting_high = (
+            self._current_max_charge is not None
+            and self._current_max_charge >= deye_config.max_charge_amps_limit * min_charge_setting_pct / 100
+        )
+        expected_charge_w = (self._current_max_charge or 0) * battery_voltage
+        # Cap expected at available generation — includes PV + AC-coupled inverter
+        # (AC-coupled output appears as negative grid power / export)
+        available_power = data.pv_power + abs(min(0, data.grid_power))
+        if available_power > 0:
+            expected_charge_w = min(expected_charge_w, available_power)
+        # battery_power: positive = discharging, negative = charging
+        actual_charge_w = abs(min(0, data.battery_power))
+        barely_charging = (
+            expected_charge_w > 0
+            and actual_charge_w < expected_charge_w * charge_utilization_pct / 100
+        )
+
+        should_force = (
+            data.soc < soc_threshold
+            and charge_setting_high
+            and barely_charging
+            and is_exporting
+        )
+
+        if should_force and not self._export_leak_forced_zero_export:
+            # Save current mode so we can restore it later
+            self._export_leak_original_mode = self._current_work_mode
+            target_mode = deye_config.zero_export_mode
+            mode_changed = False
+            if self._current_work_mode != target_mode:
+                if self.inverter.set_work_mode(target_mode):
+                    self._current_work_mode = target_mode
+                    mode_changed = True
+            # Disable solar sell to prevent grid export
+            sell_disabled = self.inverter.set_solar_sell(False)
+            if mode_changed or sell_disabled:
+                print(f"[EXPORT LEAK] Forcing zero-export + solar sell OFF: SOC={data.soc}%, "
+                      f"charge={actual_charge_w}W/{expected_charge_w:.0f}W expected, "
+                      f"export={abs(data.grid_power)}W")
+                self._log_error(
+                    f"Export leak: Forced zero-export + sell OFF (SOC={data.soc}%, "
+                    f"charging {actual_charge_w}W/{expected_charge_w:.0f}W, "
+                    f"exporting {abs(data.grid_power)}W)")
+            self._export_leak_forced_zero_export = True
+
+        elif not should_force and self._export_leak_forced_zero_export:
+            # Condition cleared — restore previous work mode and re-enable solar sell
+            restore_mode = self._export_leak_original_mode
+            if restore_mode is not None and self._current_work_mode != restore_mode:
+                if self.inverter.set_work_mode(restore_mode):
+                    self._current_work_mode = restore_mode
+            self.inverter.set_solar_sell(True)
+            print(f"[EXPORT LEAK] Cleared: restoring work mode + solar sell ON "
+                  f"(SOC={data.soc}%, charge={actual_charge_w}W, export={abs(data.grid_power)}W)")
+            self._log_error(f"Export leak cleared: restored work mode + sell ON")
+            self._export_leak_forced_zero_export = False
+            self._export_leak_original_mode = None
+
     def _process_ev_charging(self, data: InverterData) -> None:
         """Process EV charger logic (called from background thread)."""
         if self.ev_logic is None:
@@ -1215,6 +1303,8 @@ class DeyeApp(ctk.CTk):
                     self._process_overpower_protection(data)
                     # Process sunset charging (may further boost if needed to reach target by sunset)
                     self._process_sunset_charging(data)
+                    # Anti-export: force zero-export if inverter leaks to grid despite high charge setting
+                    self._process_export_leak_protection(data)
                     # Process Tuya heat pump logic
                     self._process_heatpump(data)
                     # Process EV charger logic
