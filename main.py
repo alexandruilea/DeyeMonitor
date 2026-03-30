@@ -516,10 +516,12 @@ class DeyeApp(ctk.CTk):
         
         all_success = True
         
-        # Only write max charge if it changed
-        if self._current_max_charge != target_max:
-            if self.inverter.set_max_charge_current(target_max):
-                self._current_max_charge = target_max
+        # Only write max charge if it changed — but respect active sunset/protection boosts
+        effective_target_max = target_max + self._protection_boost_amps + self._sunset_boost_amps
+        effective_target_max = min(effective_target_max, deye_config.max_charge_amps_limit)
+        if self._current_max_charge != effective_target_max:
+            if self.inverter.set_max_charge_current(effective_target_max):
+                self._current_max_charge = effective_target_max
             else:
                 all_success = False
         
