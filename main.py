@@ -1332,7 +1332,7 @@ class DeyeApp(ctk.CTk):
         """Update the dashboard with new inverter data (called on main thread)."""
         # Update header with grid connection status
         self.header.update_status("SYSTEM ONLINE", "#2ECC71", data.is_grid_connected)
-        self.header.update_solar(data.pv_power)
+        self.header.update_solar(data.pv_power, data.gen_port_power)
         self.header.update_battery(data.soc, data.battery_power)
         self.header.update_grid(data.grid_power)
         

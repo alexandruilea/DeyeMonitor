@@ -344,9 +344,12 @@ class StatusHeader(ctk.CTkFrame):
         # Use the main color for status, grid status color is shown in the text
         self.lbl_status.configure(text=full_text, text_color=grid_color)
 
-    def update_solar(self, power: int) -> None:
-        """Update solar power display."""
-        self.lbl_solar.configure(text=f"SOLAR\n{power}W")
+    def update_solar(self, power: int, gen_power: int = 0) -> None:
+        """Update solar power display. Shows micro inverter contribution in brackets."""
+        if gen_power > 0:
+            self.lbl_solar.configure(text=f"SOLAR\n{power}W (+{gen_power}W)")
+        else:
+            self.lbl_solar.configure(text=f"SOLAR\n{power}W")
 
     def update_battery(self, soc: int, power: int) -> None:
         """Update battery display."""
