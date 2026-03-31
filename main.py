@@ -504,8 +504,14 @@ class DeyeApp(ctk.CTk):
             target_sell_power = defaults.get("sell_power", 0)
             schedule_key = ("default", target_max, target_grid, target_discharge, target_sell, target_sell_power)
         
-        # Only apply if settings changed
-        if self._last_applied_schedule == schedule_key:
+        # Only apply if settings changed — but also re-apply if the register
+        # is out of sync (e.g. a previous write failed)
+        effective_target_max = target_max + self._protection_boost_amps + self._sunset_boost_amps
+        effective_target_max = min(effective_target_max, deye_config.max_charge_amps_limit)
+        register_in_sync = (self._current_max_charge == effective_target_max and
+                            self._current_grid_charge == target_grid and
+                            self._current_max_discharge == target_discharge)
+        if self._last_applied_schedule == schedule_key and register_in_sync:
             return
         
         # Determine work mode: 0 = Selling First, 1/2 = Zero Export (from config)
@@ -874,7 +880,13 @@ class DeyeApp(ctk.CTk):
             # Round to 10A steps to avoid writing every single amp change
             sunset_boost = ((sunset_boost + 9) // 10) * 10
             
-            if sunset_boost != self._sunset_boost_amps:
+            # Also retry if boost is set but register doesn't match (failed write recovery)
+            expected_charge = base_charge + self._protection_boost_amps + sunset_boost
+            expected_charge = min(expected_charge, deye_config.max_charge_amps_limit)
+            needs_write = (sunset_boost != self._sunset_boost_amps or
+                           (self._sunset_active and self._current_max_charge != expected_charge))
+            
+            if needs_write:
                 # Verify inverter has caught up before changing charge speed
                 if not self._is_charge_speed_settled(data, data.battery_voltage if data.battery_voltage > 0 else 52):
                     self.after(0, lambda: self.sunset_panel.update_state(
@@ -882,25 +894,27 @@ class DeyeApp(ctk.CTk):
                         self._cloud_boost_factor, weather_str, sparkline))
                     return
                 
-                self._sunset_boost_amps = sunset_boost
-                self._sunset_active = True
-                self._last_sunset_adjustment = current_time
-                target_charge = base_charge + self._protection_boost_amps + self._sunset_boost_amps
-                target_charge = min(target_charge, deye_config.max_charge_amps_limit)
+                target_charge = expected_charge
                 
                 peak_info = f"peak={peak_hour:.1f}h" if peak_hour > 0 else "peak=auto"
                 src_info = f"forecast q={day_quality:.0%}" if forecast_active else peak_info
                 print(f"[SUNSET] Boosting: Base={base_charge}A + Protection={self._protection_boost_amps}A"
-                      f" + Sunset={self._sunset_boost_amps}A = {target_charge}A"
+                      f" + Sunset={sunset_boost}A = {target_charge}A"
                       f" (need {remaining_ah:.0f}Ah in {hours_left:.1f}h, weight={current_weight:.2f},"
                       f" {src_info}, SOC {current_soc}%→{target_soc}%)")
                 
                 if self.inverter.set_max_charge_current(target_charge):
+                    # Only update boost state after confirmed write
+                    self._sunset_boost_amps = sunset_boost
+                    self._sunset_active = True
+                    self._last_sunset_adjustment = current_time
                     self._current_max_charge = target_charge
                     self._update_charge_display()
                     self._log_error(
                         f"Sunset charging: {target_charge}A "
                         f"({remaining_ah:.0f}Ah in {hours_left:.1f}h, SOC {current_soc}%→{target_soc}%)")
+                else:
+                    print(f"[SUNSET] Write failed — will retry next cycle")
         else:
             # Base + protection is enough, no sunset boost needed
             if self._sunset_boost_amps > 0:
