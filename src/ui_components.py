@@ -346,8 +346,9 @@ class StatusHeader(ctk.CTkFrame):
 
     def update_solar(self, power: int, gen_power: int = 0) -> None:
         """Update solar power display. Shows micro inverter contribution in brackets."""
-        if gen_power > 0:
-            self.lbl_solar.configure(text=f"SOLAR\n{power}W (+{gen_power}W)")
+        if gen_power != 0:
+            sign = "+" if gen_power > 0 else ""
+            self.lbl_solar.configure(text=f"SOLAR\n{power}W ({sign}{gen_power}W)")
         else:
             self.lbl_solar.configure(text=f"SOLAR\n{power}W")
 

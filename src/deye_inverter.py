@@ -142,8 +142,8 @@ class DeyeInverter:
             result = InverterData(
                 soc=raw[0],  # R0: Battery capacity
                 battery_power=self._parse_signed(raw[2]),  # R2: Battery output power
-                pv_power=raw[84] + raw[85] + raw[79],  # R84-85: PV string power + R79: Gen port (micro inverter)
-                gen_port_power=raw[79],  # R79: Gen port total power (register 667, micro inverter input)
+                pv_power=raw[84] + raw[85] + max(0, self._parse_signed(raw[79])),  # R84-85: PV string power + R79: Gen port (only adds when producing)
+                gen_port_power=self._parse_signed(raw[79]),  # R79: Gen port total power (register 667, signed — negative = standby consumption)
                 grid_power=self._parse_signed(raw[37]),  # R37: Grid side total power
                 voltages=[raw[56] / 10, raw[57] / 10, raw[58] / 10],  # R56-58: Load phase voltages
                 ups_loads=[raw[52], raw[53], raw[54]],  # R52-54: UPS load-side phase power (backup port output)
