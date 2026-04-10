@@ -1462,6 +1462,7 @@ class DeyeApp(ctk.CTk):
             enabled=ui_settings["enabled"],
             schedules=ui_settings["schedules"],
             solar_override_enabled=ui_settings["solar_override_enabled"],
+            solar_override_production_min=ui_settings["solar_override_production_min"],
             solar_override_export_min=ui_settings["solar_override_export_min"],
             solar_override_hp_power=ui_settings["solar_override_hp_power"],
             solar_override_delay=ui_settings["solar_override_delay"],
@@ -1475,7 +1476,7 @@ class DeyeApp(ctk.CTk):
             phase_change_delay=ui_settings["phase_change_delay"],
         )
 
-        result, detail = self.hp_logic.process(settings, data.grid_power, data.soc, data.voltages)
+        result, detail = self.hp_logic.process(settings, data.grid_power, data.soc, data.voltages, data.pv_power)
         hp_state = self.hp_manager.get_state()
 
         # Log only on state transitions (ignore detail changes within the same state)

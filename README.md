@@ -264,12 +264,13 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 **Solar Override:**
 
-| Variable                             | Description                                                                    | Default |
-| ------------------------------------ | ------------------------------------------------------------------------------ | ------- |
-| `HEATPUMP_SOLAR_OVERRIDE`            | Enable solar override                                                          | `true`  |
-| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN` | Min grid export (W) to trigger ON                                              | `3000`  |
-| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`   | HP rated power (W) — stops if grid import > half                               | `3000`  |
-| `HEATPUMP_SOLAR_OVERRIDE_DELAY`      | Seconds export/import must sustain before solar override activates/deactivates | `60`    |
+| Variable                                 | Description                                                                    | Default |
+| ---------------------------------------- | ------------------------------------------------------------------------------ | ------- |
+| `HEATPUMP_SOLAR_OVERRIDE`                | Enable solar override                                                          | `true`  |
+| `HEATPUMP_SOLAR_OVERRIDE_PRODUCTION_MIN` | Min PV production (W) to trigger ON (0 = disabled)                             | `0`     |
+| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN`     | Min grid export (W) to trigger ON (0 = disabled)                               | `0`     |
+| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`       | HP rated power (W) — stops if grid import > half                               | `3000`  |
+| `HEATPUMP_SOLAR_OVERRIDE_DELAY`          | Seconds export/import must sustain before solar override activates/deactivates | `60`    |
 
 **SOC Overrides:**
 

@@ -1911,24 +1911,31 @@ class HeatpumpPanel(ctk.CTkFrame):
 
         ctk.CTkLabel(sf, text="Trigger:", font=("Roboto", 10, "bold"),
                       text_color="#F39C12").grid(row=0, column=1, padx=(15, 2), pady=8, sticky="e")
+        self.solar_production_min = ctk.CTkEntry(sf, width=60, justify="center")
+        self.solar_production_min.grid(row=0, column=2, padx=2, pady=8, sticky="w")
+        self.solar_production_min.insert(0, str(heatpump_config.solar_override_production_min))
+        ctk.CTkLabel(sf, text="W production", font=("Roboto", 10)).grid(row=0, column=3, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="Export:", font=("Roboto", 10, "bold"),
+                      text_color="#F39C12").grid(row=0, column=4, padx=(10, 2), pady=8, sticky="e")
         self.solar_export_min = ctk.CTkEntry(sf, width=60, justify="center")
-        self.solar_export_min.grid(row=0, column=2, padx=2, pady=8, sticky="w")
+        self.solar_export_min.grid(row=0, column=5, padx=2, pady=8, sticky="w")
         self.solar_export_min.insert(0, str(heatpump_config.solar_override_export_min))
-        ctk.CTkLabel(sf, text="W export", font=("Roboto", 10)).grid(row=0, column=3, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="W export", font=("Roboto", 10)).grid(row=0, column=6, padx=(0, 10), pady=8)
 
         ctk.CTkLabel(sf, text="HP Power:", font=("Roboto", 10, "bold"),
-                      text_color="#E74C3C").grid(row=0, column=4, padx=(10, 2), pady=8, sticky="e")
+                      text_color="#E74C3C").grid(row=0, column=7, padx=(10, 2), pady=8, sticky="e")
         self.solar_hp_power = ctk.CTkEntry(sf, width=60, justify="center")
-        self.solar_hp_power.grid(row=0, column=5, padx=2, pady=8, sticky="w")
+        self.solar_hp_power.grid(row=0, column=8, padx=2, pady=8, sticky="w")
         self.solar_hp_power.insert(0, str(heatpump_config.solar_override_hp_power))
-        ctk.CTkLabel(sf, text="W", font=("Roboto", 10)).grid(row=0, column=6, padx=(0, 8), pady=8)
+        ctk.CTkLabel(sf, text="W", font=("Roboto", 10)).grid(row=0, column=9, padx=(0, 8), pady=8)
 
         ctk.CTkLabel(sf, text="Delay:", font=("Roboto", 10, "bold"),
-                      text_color="#95A5A6").grid(row=0, column=7, padx=(8, 2), pady=8, sticky="e")
+                      text_color="#95A5A6").grid(row=0, column=10, padx=(8, 2), pady=8, sticky="e")
         self.solar_delay = ctk.CTkEntry(sf, width=45, justify="center")
-        self.solar_delay.grid(row=0, column=8, padx=2, pady=8, sticky="w")
+        self.solar_delay.grid(row=0, column=11, padx=2, pady=8, sticky="w")
         self.solar_delay.insert(0, str(heatpump_config.solar_override_delay))
-        ctk.CTkLabel(sf, text="s", font=("Roboto", 10)).grid(row=0, column=9, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="s", font=("Roboto", 10)).grid(row=0, column=12, padx=(0, 10), pady=8)
 
         # ── Settings row: SOC & Voltage overrides ───────────────────
         vf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -2103,6 +2110,7 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "enabled": self.enabled_var.get(),
                 "schedules": schedules,
                 "solar_override_enabled": self.solar_override_var.get(),
+                "solar_override_production_min": int(self.solar_production_min.get()),
                 "solar_override_export_min": int(self.solar_export_min.get()),
                 "solar_override_hp_power": int(self.solar_hp_power.get()),
                 "solar_override_delay": int(self.solar_delay.get()),
@@ -2120,6 +2128,7 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "enabled": False,
                 "schedules": schedules,
                 "solar_override_enabled": heatpump_config.solar_override_enabled,
+                "solar_override_production_min": heatpump_config.solar_override_production_min,
                 "solar_override_export_min": heatpump_config.solar_override_export_min,
                 "solar_override_hp_power": heatpump_config.solar_override_hp_power,
                 "solar_override_delay": heatpump_config.solar_override_delay,
