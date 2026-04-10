@@ -131,6 +131,9 @@ class DeyeApp(ctk.CTk):
         # Anti-export leakage: force zero-export when inverter ignores charge setting
         self._export_leak_forced_zero_export = False  # Whether we forced zero-export mode
         self._export_leak_original_mode = None  # Work mode to restore when condition clears
+        self._export_leak_condition_since: float | None = None  # When should_force first became True continuously
+        self._export_leak_clear_since: float | None = None  # When should_force first became False continuously
+        self._export_leak_debounce_sec = 300  # 5-minute debounce for both transitions
         self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling 60-min window
         self._cloud_boost_factor = 1.0  # Current cloudy day boost multiplier
         
@@ -217,7 +220,7 @@ class DeyeApp(ctk.CTk):
         # Stats row (Total UPS power + Load consumption + Current charge settings)
         stats_frame = ctk.CTkFrame(self.scrollable, fg_color="transparent")
         stats_frame.grid(row=5, column=0, columnspan=3, pady=5, sticky="ew")
-        stats_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        stats_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
         
         # Total UPS power display
         self.lbl_total_power = ctk.CTkLabel(
@@ -228,6 +231,15 @@ class DeyeApp(ctk.CTk):
         )
         self.lbl_total_power.grid(row=0, column=0, padx=10, sticky="w")
         
+        # Solar sell status display
+        self.lbl_solar_sell = ctk.CTkLabel(
+            stats_frame,
+            text="Sell: ON",
+            font=("Roboto", 14, "bold"),
+            text_color="#2ECC71"
+        )
+        self.lbl_solar_sell.grid(row=0, column=1, padx=10, sticky="w")
+        
         # Total load consumption per phase display
         self.lbl_load_consumption = ctk.CTkLabel(
             stats_frame,
@@ -235,7 +247,7 @@ class DeyeApp(ctk.CTk):
             font=("Roboto", 14, "bold"),
             text_color="#9B59B6"
         )
-        self.lbl_load_consumption.grid(row=0, column=1, padx=10)
+        self.lbl_load_consumption.grid(row=0, column=2, padx=10)
         
         # Current charge settings display
         self.lbl_charge_settings = ctk.CTkLabel(
@@ -244,7 +256,7 @@ class DeyeApp(ctk.CTk):
             font=("Roboto", 14, "bold"),
             text_color="#3498DB"
         )
-        self.lbl_charge_settings.grid(row=0, column=2, padx=10, sticky="e")
+        self.lbl_charge_settings.grid(row=0, column=3, padx=10, sticky="e")
         
         # Time Schedule Panel (for charge scheduling)
         self.schedule_panel = TimeSchedulePanel(
@@ -1167,8 +1179,20 @@ class DeyeApp(ctk.CTk):
             and is_exporting
         )
 
+        now = time.time()
+
         if should_force and not self._export_leak_forced_zero_export:
-            # Save current mode so we can restore it later
+            # Condition detected — reset clear timer, start/continue condition timer
+            self._export_leak_clear_since = None
+            if self._export_leak_condition_since is None:
+                self._export_leak_condition_since = now
+            elapsed = now - self._export_leak_condition_since
+            if elapsed < self._export_leak_debounce_sec:
+                remaining = int(self._export_leak_debounce_sec - elapsed)
+                self._update_sell_label(True, remaining, switching_to_off=True)
+                return
+            # Debounce elapsed — force zero-export + sell OFF
+            self._export_leak_condition_since = None
             self._export_leak_original_mode = self._current_work_mode
             target_mode = deye_config.zero_export_mode
             mode_changed = False
@@ -1179,27 +1203,61 @@ class DeyeApp(ctk.CTk):
             # Disable solar sell to prevent grid export
             sell_disabled = self.inverter.set_solar_sell(False)
             if mode_changed or sell_disabled:
-                print(f"[EXPORT LEAK] Forcing zero-export + solar sell OFF: SOC={data.soc}%, "
-                      f"charge={actual_charge_w}W/{expected_charge_w:.0f}W expected, "
-                      f"export={abs(data.grid_power)}W")
                 self._log_error(
                     f"Export leak: Forced zero-export + sell OFF (SOC={data.soc}%, "
                     f"charging {actual_charge_w}W/{expected_charge_w:.0f}W, "
                     f"exporting {abs(data.grid_power)}W)")
             self._export_leak_forced_zero_export = True
+            self._update_sell_label(False)
 
         elif not should_force and self._export_leak_forced_zero_export:
-            # Condition cleared — restore previous work mode and re-enable solar sell
+            # Condition cleared — reset condition timer, start/continue clear timer
+            self._export_leak_condition_since = None
+            if self._export_leak_clear_since is None:
+                self._export_leak_clear_since = now
+            elapsed = now - self._export_leak_clear_since
+            if elapsed < self._export_leak_debounce_sec:
+                remaining = int(self._export_leak_debounce_sec - elapsed)
+                self._update_sell_label(False, remaining, switching_to_off=False)
+                return
+            # Debounce elapsed — restore previous work mode and re-enable solar sell
+            self._export_leak_clear_since = None
             restore_mode = self._export_leak_original_mode
             if restore_mode is not None and self._current_work_mode != restore_mode:
                 if self.inverter.set_work_mode(restore_mode):
                     self._current_work_mode = restore_mode
             self.inverter.set_solar_sell(True)
-            print(f"[EXPORT LEAK] Cleared: restoring work mode + solar sell ON "
-                  f"(SOC={data.soc}%, charge={actual_charge_w}W, export={abs(data.grid_power)}W)")
             self._log_error(f"Export leak cleared: restored work mode + sell ON")
             self._export_leak_forced_zero_export = False
             self._export_leak_original_mode = None
+            self._update_sell_label(True)
+
+        elif should_force and self._export_leak_forced_zero_export:
+            # Still in forced state and condition still holds — reset clear timer
+            self._export_leak_clear_since = None
+            self._update_sell_label(False)
+
+        else:
+            # Not forced and condition not met — reset both timers
+            self._export_leak_condition_since = None
+            self._export_leak_clear_since = None
+            self._update_sell_label(True)
+
+    def _update_sell_label(self, sell_on: bool, countdown: int | None = None, switching_to_off: bool | None = None) -> None:
+        """Update the solar sell status label on the UI thread."""
+        if countdown is not None and switching_to_off is not None:
+            direction = "OFF" if switching_to_off else "ON"
+            mins = countdown // 60
+            secs = countdown % 60
+            text = f"Sell: {'ON' if sell_on else 'OFF'}  \u2192 {direction} in {mins}m{secs:02d}s"
+            color = "#FFA500"  # orange while waiting
+        elif sell_on:
+            text = "Sell: ON"
+            color = "#2ECC71"  # green
+        else:
+            text = "Sell: OFF"
+            color = "#E74C3C"  # red
+        self.after(0, lambda t=text, c=color: self.lbl_solar_sell.configure(text=t, text_color=c))
 
     def _process_ev_charging(self, data: InverterData) -> None:
         """Process EV charger logic (called from background thread)."""
