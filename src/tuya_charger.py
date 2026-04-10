@@ -4,6 +4,7 @@ Controls an EV charger via tinytuya, supporting on/off and amperage control.
 Runs an async-safe polling loop in a background thread.
 """
 
+import json
 import threading
 import time
 from typing import Optional, Callable
@@ -22,6 +23,7 @@ class ChargerState:
     is_charging: bool = False    # Car is actually drawing power (DP 124)
     error_state: str = ""        # DP 101 — "normal" or error description
     current_amps: int = 0
+    is_cloud: bool = False       # True when connected via cloud fallback
     # Timestamps for rate-limiting
     last_change_time: float = 0.0
 
@@ -45,9 +47,28 @@ class TuyaChargerManager:
         self._retry_count = 0
         self._max_retries = 10
         self._permanent_failure = False
+        self._permanent_failure_time: float = 0.0  # When permanent failure was set
+        self._recovery_interval: float = 300.0     # Retry connection every 5 min after permanent failure
         self._last_error_logged = False
         self._known_dps: dict = {}  # Merged DPS state across partial reads
         self._write_grace_until: float = 0.0  # Don't overwrite amps from poll until this time
+
+        # Cloud fallback
+        self._cloud: Optional[tinytuya.Cloud] = None
+        self._use_cloud: bool = False
+        if config.cloud_api_key and config.cloud_api_secret:
+            try:
+                self._cloud = tinytuya.Cloud(
+                    apiRegion=config.cloud_api_region,
+                    apiKey=config.cloud_api_key,
+                    apiSecret=config.cloud_api_secret,
+                    apiDeviceID=config.device_id,
+                )
+                self._max_retries = 3  # Fail over to cloud faster
+                print("[EV Charger] Cloud fallback ready")
+            except Exception as e:
+                self._cloud = None
+                print(f"[EV Charger] Cloud init failed: {e}")
 
         # Start background polling thread
         self._running = True
@@ -90,20 +111,57 @@ class TuyaChargerManager:
         """Background thread: connect, poll status, apply pending commands."""
         while self._running:
             try:
-                if self._permanent_failure:
-                    time.sleep(5)
+                # --- Cloud fallback mode ---
+                if self._use_cloud:
+                    self._cloud_poll_status()
+                    self._cloud_apply_pending()
+                    # Periodically retry local connection
+                    if time.time() - self._permanent_failure_time >= self._recovery_interval:
+                        self._use_cloud = False
+                        self._permanent_failure = False
+                        self._retry_count = 0
+                        self._last_error_logged = False
+                        self._device = None
+                        if self.error_callback:
+                            self.error_callback("[EV Charger] Retrying local connection...")
+                    time.sleep(2)
                     continue
 
-                # Connect if needed
+                if self._permanent_failure:
+                    # Switch to cloud fallback if available
+                    if self._cloud is not None:
+                        self._use_cloud = True
+                        self.state.is_cloud = True
+                        if self.error_callback:
+                            self.error_callback("[EV Charger] Switched to cloud control")
+                        continue
+                    # No cloud — periodically retry local
+                    if time.time() - self._permanent_failure_time >= self._recovery_interval:
+                        self._permanent_failure = False
+                        self._retry_count = 0
+                        self._last_error_logged = False
+                        if self.error_callback:
+                            self.error_callback("[EV Charger] Retrying connection...")
+                    else:
+                        time.sleep(5)
+                    continue
+
+                # --- Local connection mode ---
                 if self._device is None:
                     if self._retry_count >= self._max_retries:
                         self._permanent_failure = True
+                        self._permanent_failure_time = time.time()
                         self.state.is_connected = False
                         if self.error_callback and not self._last_error_logged:
-                            self.error_callback(
-                                f"[EV Charger] FAILED - Stopped retrying after "
-                                f"{self._max_retries} attempts. Check configuration."
-                            )
+                            if self._cloud is not None:
+                                self.error_callback(
+                                    "[EV Charger] Local failed - switching to cloud"
+                                )
+                            else:
+                                self.error_callback(
+                                    f"[EV Charger] FAILED - Retrying in "
+                                    f"{int(self._recovery_interval)}s"
+                                )
                             self._last_error_logged = True
                         continue
                     self._connect()
@@ -137,14 +195,18 @@ class TuyaChargerManager:
                 version=self.config.protocol_version,
             )
             dev.set_socketPersistent(True)
+            dev.set_socketTimeout(5)
             # Quick status check to verify connection
             status = dev.status()
             if "Error" in status:
                 raise ConnectionError(status["Error"])
             self._device = dev
             self.state.is_connected = True
-            if self.error_callback and self._retry_count > 0:
-                self.error_callback("[EV Charger] Reconnected")
+            self.state.is_cloud = False
+            self._use_cloud = False
+            self._permanent_failure = False
+            if self.error_callback and (self._retry_count > 0 or self._use_cloud):
+                self.error_callback("[EV Charger] Reconnected (local)")
         except Exception as e:
             self._device = None
             self.state.is_connected = False
@@ -276,5 +338,109 @@ class TuyaChargerManager:
                 self.error_callback(f"[EV Charger] Error: {summary}")
             self._last_error_logged = True
         self.state.is_connected = False
+        # Force-close stale socket before reconnect
+        if self._device is not None:
+            try:
+                self._device.close()
+            except Exception:
+                pass
         self._device = None
         self._retry_count += 1
+
+    # ------------------------------------------------------------------
+    # Cloud fallback methods
+    # ------------------------------------------------------------------
+
+    def _cloud_poll_status(self) -> None:
+        """Read charger status via Tuya Cloud API shadow endpoint."""
+        devid = self.config.device_id
+        result = self._cloud.cloudrequest(
+            f'v2.0/cloud/thing/{devid}/shadow/properties'
+        )
+        if not result.get("success"):
+            self.state.is_connected = False
+            return
+
+        props = {}
+        for p in result.get("result", {}).get("properties", []):
+            props[p["code"]] = p.get("value")
+
+        # Switch state
+        if "switch" in props:
+            self.state.is_on = bool(props["switch"])
+
+        # DeviceState: "charing" = actively providing power (feyree misspelling)
+        device_state = str(props.get("DeviceState", "")).lower()
+        self.state.error_state = device_state if "error" in device_state or "fault" in device_state else ""
+        dp101_charging = "char" in device_state
+
+        # ChargingOperation: OpenCharging / CloseCharging / WaitOperation
+        charging_op = str(props.get("ChargingOperation", "")).lower()
+        dp124_active = "close" not in charging_op and charging_op != ""
+
+        if dp101_charging:
+            self.state.is_on = True
+        self.state.is_charging = dp101_charging and dp124_active
+
+        # Read amps from the matching SetXXA code
+        amps_code = self.config.cloud_amps_code
+        if amps_code in props and time.time() > self._write_grace_until:
+            self.state.current_amps = int(props[amps_code])
+
+        self.state.is_connected = True
+        self.state.is_cloud = True
+
+    def _cloud_apply_pending(self) -> None:
+        """Apply pending commands via Tuya Cloud API."""
+        if self.state.error_state:
+            return
+
+        with self._lock:
+            pending_on_off = self._pending_on_off
+            pending_amps = self._pending_amps
+
+        if pending_on_off is None and pending_amps is None:
+            return
+
+        devid = self.config.device_id
+        amps_code = self.config.cloud_amps_code
+        desc_parts = []
+
+        with self._lock:
+            if self._pending_amps is not None:
+                desired_amps = self._pending_amps
+                if desired_amps != self.state.current_amps:
+                    # Cloud: OFF → set amps → ON (same safe sequence)
+                    lowering = desired_amps < self.state.current_amps
+                    if lowering and self.state.is_on:
+                        self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': False}]})
+                        time.sleep(5)
+                    self._cloud.cloudrequest(
+                        f'v2.0/cloud/thing/{devid}/shadow/properties/issue',
+                        post={'properties': json.dumps({amps_code: desired_amps})}
+                    )
+                    if lowering and self.state.is_on:
+                        time.sleep(5)
+                        self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': True}]})
+                    desc_parts.append(f"{desired_amps}A")
+                    self.state.current_amps = desired_amps
+                    self._write_grace_until = time.time() + 30
+                self._pending_amps = None
+
+            if self._pending_on_off is not None:
+                desired_on = self._pending_on_off
+                if desired_on != self.state.is_on:
+                    self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': desired_on}]})
+                    desc_parts.append("ON" if desired_on else "OFF")
+                    self.state.is_on = desired_on
+                self._pending_on_off = None
+
+        if not desc_parts:
+            return
+
+        now = time.time()
+        self.state.last_change_time = now
+        desc = ", ".join(desc_parts)
+        print(f"[EV Charger] Cloud applied: {desc}")
+        if self.error_callback:
+            self.error_callback(f"[EV Charger] Cloud set {desc}")

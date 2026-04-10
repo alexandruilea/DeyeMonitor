@@ -52,6 +52,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     - **Grid-pull stop** — Stops charging if grid import is sustained for 5+ minutes (battery exhausted)
     - **Safe amp changes** — Stops charger before lowering amps, waits 5 s, then restarts to prevent overcurrent trips
   - _Rate limiting_: Configurable cooldown between any charger state changes
+  - _Cloud fallback_: If local connection fails after max retries, automatically switches to Tuya Cloud API control; periodically retries local connection in the background
 - 🔥 **Tapo Smart Plug Outlets** - Automatic consumer control via TP-Link Tapo smart plugs:
   - _Triggers_: Battery SOC threshold, grid export detection, high-voltage dumping
   - _Safety_:
@@ -349,6 +350,10 @@ HEATPUMP_SCHEDULE_3=18:00-06:00,28,35       # Evening/night: maintain 28-35°C
 | Grid charge A | Amps to use in grid charge mode                          | 20A        |
 | Ramp ↓ delay  | Minutes between solar ramp-down steps                    | 5 min      |
 | Amp steps     | Significant amp levels for ramp-down (comma-separated)   | 8,16,24,32 |
+| Cloud API Key | Tuya IoT Platform Access ID (enables cloud fallback)     |            |
+| Cloud Secret  | Tuya IoT Platform Access Secret                          |            |
+| Cloud Region  | Tuya cloud region (eu, us, cn, in)                       | eu         |
+| Cloud Amps    | Cloud DP code for amps setting (Set32A, Set16A)          | Set32A     |
 
 ### Heat Pump – Socket Thermostat
 

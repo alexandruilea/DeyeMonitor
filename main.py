@@ -1311,6 +1311,7 @@ class DeyeApp(ctk.CTk):
             current_amps=charger_state.current_amps,
             result_text=result.value,
             detail=detail,
+            is_cloud=charger_state.is_cloud,
         ))
 
     def _on_manual_toggle(self) -> None:

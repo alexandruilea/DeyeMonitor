@@ -211,6 +211,11 @@ class EVChargerConfig:
     dp_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS", "6")))
     dp_state: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_STATE", "124")))  # DP for charger state string
     dp_amps_scale: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS_SCALE", "1")))  # 1=amps, 10=amps×10, 1000=milliamps
+    # Tuya Cloud API fallback (used when local connection fails)
+    cloud_api_key: str = field(default_factory=lambda: os.getenv("TUYA_CLOUD_API_KEY", ""))
+    cloud_api_secret: str = field(default_factory=lambda: os.getenv("TUYA_CLOUD_API_SECRET", ""))
+    cloud_api_region: str = field(default_factory=lambda: os.getenv("TUYA_CLOUD_API_REGION", "eu"))
+    cloud_amps_code: str = field(default_factory=lambda: os.getenv("EV_CHARGER_CLOUD_AMPS_CODE", "Set32A"))  # Cloud DP code for amps (Set16A/Set32A/Set40A/Set50A)
 
 
 @dataclass

@@ -1708,19 +1708,20 @@ class EVChargerPanel(ctk.CTkFrame):
             }
     def update_ev_state(self, connected: bool, is_on: bool, charging: bool,
                         error_state: str, current_amps: int, result_text: str,
-                        detail: str) -> None:
+                        detail: str, is_cloud: bool = False) -> None:
         """Update the live state display labels."""
         # Charger connection status
+        cloud_tag = " ☁" if is_cloud else ""
         if not connected:
             self.lbl_charger_status.configure(text="Charger: Offline", text_color="#E74C3C")
         elif error_state:
-            self.lbl_charger_status.configure(text=f"Charger: Error ({error_state})", text_color="#E74C3C")
+            self.lbl_charger_status.configure(text=f"Charger: Error ({error_state}){cloud_tag}", text_color="#E74C3C")
         elif charging:
-            self.lbl_charger_status.configure(text="Charger: Charging", text_color="#2ECC71")
+            self.lbl_charger_status.configure(text=f"Charger: Charging{cloud_tag}", text_color="#2ECC71")
         elif is_on:
-            self.lbl_charger_status.configure(text="Charger: ON (waiting for EV)", text_color="#F39C12")
+            self.lbl_charger_status.configure(text=f"Charger: ON (waiting for EV){cloud_tag}", text_color="#F39C12")
         else:
-            self.lbl_charger_status.configure(text="Charger: Standby", text_color="#888888")
+            self.lbl_charger_status.configure(text=f"Charger: Standby{cloud_tag}", text_color="#888888")
 
         # Current amps
         if connected:
