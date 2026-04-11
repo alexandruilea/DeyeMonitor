@@ -56,6 +56,9 @@ class TuyaChargerManager:
         # Cloud fallback
         self._cloud: Optional[tinytuya.Cloud] = None
         self._use_cloud: bool = False
+        self._cloud_retry_count: int = 0
+        self._max_cloud_retries: int = 5
+        self._cloud_error_logged: bool = False
         if config.cloud_api_key and config.cloud_api_secret:
             try:
                 self._cloud = tinytuya.Cloud(
@@ -113,17 +116,29 @@ class TuyaChargerManager:
             try:
                 # --- Cloud fallback mode ---
                 if self._use_cloud:
-                    self._cloud_poll_status()
-                    self._cloud_apply_pending()
-                    # Periodically retry local connection
-                    if time.time() - self._permanent_failure_time >= self._recovery_interval:
-                        self._use_cloud = False
-                        self._permanent_failure = False
-                        self._retry_count = 0
-                        self._last_error_logged = False
-                        self._device = None
-                        if self.error_callback:
-                            self.error_callback("[EV Charger] Retrying local connection...")
+                    try:
+                        self._cloud_poll_status()
+                        self._cloud_apply_pending()
+                        self._cloud_retry_count = 0
+                        self._cloud_error_logged = False
+                    except Exception as e:
+                        self._cloud_retry_count += 1
+                        if not self._cloud_error_logged:
+                            if self.error_callback:
+                                self.error_callback(f"[EV Charger] Cloud error: {str(e)[:100]}")
+                            self._cloud_error_logged = True
+                        if self._cloud_retry_count >= self._max_cloud_retries:
+                            # Cloud also failing — fall back to local retry
+                            self._use_cloud = False
+                            self.state.is_cloud = False
+                            self._permanent_failure = False
+                            self._retry_count = 0
+                            self._last_error_logged = False
+                            self._device = None
+                            self._cloud_retry_count = 0
+                            self._cloud_error_logged = False
+                            if self.error_callback:
+                                self.error_callback("[EV Charger] Cloud failed - retrying local")
                     time.sleep(2)
                     continue
 
@@ -132,6 +147,8 @@ class TuyaChargerManager:
                     if self._cloud is not None:
                         self._use_cloud = True
                         self.state.is_cloud = True
+                        self._cloud_retry_count = 0
+                        self._cloud_error_logged = False
                         if self.error_callback:
                             self.error_callback("[EV Charger] Switched to cloud control")
                         continue
@@ -281,9 +298,13 @@ class TuyaChargerManager:
 
         now = time.time()
 
+        # Snapshot and clear pending values under the lock, then release
+        # before doing any I/O so the main thread is never blocked.
         with self._lock:
-            pending_on_off = self._pending_on_off
             pending_amps = self._pending_amps
+            pending_on_off = self._pending_on_off
+            self._pending_amps = None
+            self._pending_on_off = None
 
         if pending_on_off is None and pending_amps is None:
             return  # Nothing to do
@@ -292,33 +313,30 @@ class TuyaChargerManager:
         amps_dp = str(self.config.dp_amps)
         desc_parts = []
 
-        with self._lock:
-            if self._pending_amps is not None:
-                desired_amps = self._pending_amps
-                scaled = desired_amps * self.config.dp_amps_scale
-                if desired_amps != self.state.current_amps:
-                    # When lowering amps while on: OFF → set → ON to avoid
-                    # overcurrent from the car still drawing the old rate.
-                    lowering = desired_amps < self.state.current_amps
-                    if lowering and self.state.is_on:
-                        self._device.set_value(switch_dp, False)
-                        time.sleep(5)
-                    self._device.set_value(amps_dp, scaled)
-                    if lowering and self.state.is_on:
-                        time.sleep(5)
-                        self._device.set_value(switch_dp, True)
-                    desc_parts.append(f"{desired_amps}A")
-                    self.state.current_amps = desired_amps
-                    self._write_grace_until = time.time() + 30
-                self._pending_amps = None
+        if pending_amps is not None:
+            desired_amps = pending_amps
+            scaled = desired_amps * self.config.dp_amps_scale
+            if desired_amps != self.state.current_amps:
+                # When lowering amps while on: OFF → set → ON to avoid
+                # overcurrent from the car still drawing the old rate.
+                lowering = desired_amps < self.state.current_amps
+                if lowering and self.state.is_on:
+                    self._device.set_value(switch_dp, False)
+                    time.sleep(5)
+                self._device.set_value(amps_dp, scaled)
+                if lowering and self.state.is_on:
+                    time.sleep(5)
+                    self._device.set_value(switch_dp, True)
+                desc_parts.append(f"{desired_amps}A")
+                self.state.current_amps = desired_amps
+                self._write_grace_until = time.time() + 30
 
-            if self._pending_on_off is not None:
-                desired_on = self._pending_on_off
-                if desired_on != self.state.is_on:
-                    self._device.set_value(switch_dp, desired_on)
-                    desc_parts.append("ON" if desired_on else "OFF")
-                    self.state.is_on = desired_on
-                self._pending_on_off = None
+        if pending_on_off is not None:
+            desired_on = pending_on_off
+            if desired_on != self.state.is_on:
+                self._device.set_value(switch_dp, desired_on)
+                desc_parts.append("ON" if desired_on else "OFF")
+                self.state.is_on = desired_on
 
         if not desc_parts:
             return  # Values already match
@@ -395,9 +413,13 @@ class TuyaChargerManager:
         if self.state.error_state:
             return
 
+        # Snapshot and clear pending values under the lock, then release
+        # before doing any I/O so the main thread is never blocked.
         with self._lock:
-            pending_on_off = self._pending_on_off
             pending_amps = self._pending_amps
+            pending_on_off = self._pending_on_off
+            self._pending_amps = None
+            self._pending_on_off = None
 
         if pending_on_off is None and pending_amps is None:
             return
@@ -406,34 +428,31 @@ class TuyaChargerManager:
         amps_code = self.config.cloud_amps_code
         desc_parts = []
 
-        with self._lock:
-            if self._pending_amps is not None:
-                desired_amps = self._pending_amps
-                if desired_amps != self.state.current_amps:
-                    # Cloud: OFF → set amps → ON (same safe sequence)
-                    lowering = desired_amps < self.state.current_amps
-                    if lowering and self.state.is_on:
-                        self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': False}]})
-                        time.sleep(5)
-                    self._cloud.cloudrequest(
-                        f'v2.0/cloud/thing/{devid}/shadow/properties/issue',
-                        post={'properties': json.dumps({amps_code: desired_amps})}
-                    )
-                    if lowering and self.state.is_on:
-                        time.sleep(5)
-                        self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': True}]})
-                    desc_parts.append(f"{desired_amps}A")
-                    self.state.current_amps = desired_amps
-                    self._write_grace_until = time.time() + 30
-                self._pending_amps = None
+        if pending_amps is not None:
+            desired_amps = pending_amps
+            if desired_amps != self.state.current_amps:
+                # Cloud: OFF → set amps → ON (same safe sequence)
+                lowering = desired_amps < self.state.current_amps
+                if lowering and self.state.is_on:
+                    self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': False}]})
+                    time.sleep(5)
+                self._cloud.cloudrequest(
+                    f'v2.0/cloud/thing/{devid}/shadow/properties/issue',
+                    post={'properties': json.dumps({amps_code: desired_amps})}
+                )
+                if lowering and self.state.is_on:
+                    time.sleep(5)
+                    self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': True}]})
+                desc_parts.append(f"{desired_amps}A")
+                self.state.current_amps = desired_amps
+                self._write_grace_until = time.time() + 30
 
-            if self._pending_on_off is not None:
-                desired_on = self._pending_on_off
-                if desired_on != self.state.is_on:
-                    self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': desired_on}]})
-                    desc_parts.append("ON" if desired_on else "OFF")
-                    self.state.is_on = desired_on
-                self._pending_on_off = None
+        if pending_on_off is not None:
+            desired_on = pending_on_off
+            if desired_on != self.state.is_on:
+                self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': desired_on}]})
+                desc_parts.append("ON" if desired_on else "OFF")
+                self.state.is_on = desired_on
 
         if not desc_parts:
             return
