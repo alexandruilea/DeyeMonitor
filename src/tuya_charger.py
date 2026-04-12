@@ -139,7 +139,7 @@ class TuyaChargerManager:
                             self._cloud_error_logged = False
                             if self.error_callback:
                                 self.error_callback("[EV Charger] Cloud failed - retrying local")
-                    time.sleep(2)
+                    time.sleep(120)
                     continue
 
                 if self._permanent_failure:
