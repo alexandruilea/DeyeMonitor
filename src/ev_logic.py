@@ -255,7 +255,10 @@ class EVChargingLogic:
         avg_voltage = sum(data.voltages) / len(data.voltages) if data.voltages else 230.0
         charger_watts = charger_state.current_amps * avg_voltage if charger_state.is_charging else 0
 
-        surplus_watts = max(0, int(charger_watts - data.grid_power))
+        # Subtract battery discharge (positive battery_power) — that power
+        # comes from the battery, not solar, and must not count as surplus.
+        battery_draw = max(0, data.battery_power)
+        surplus_watts = max(0, int(charger_watts - data.grid_power - battery_draw))
 
         # EV-first mode: also count battery charge power as available for EV
         # battery_power < 0 means charging — that energy could go to the EV instead
