@@ -101,14 +101,14 @@ class DeyeApp(ctk.CTk):
         # Tuya heat pump outlet
         self.hp_manager = None
         self.hp_logic = None
-        if heatpump_config.device_id:
+        if heatpump_config.enabled and heatpump_config.device_id:
             self.hp_manager = TuyaHeatpumpManager(heatpump_config, error_callback=self._log_error)
             self.hp_logic = HeatpumpLogic(self.hp_manager, heatpump_config)
 
         # EV charger (Tuya)
         self.ev_charger = None
         self.ev_logic = None
-        if ev_charger_config.device_id:
+        if ev_charger_config.enabled and ev_charger_config.device_id:
             self.ev_charger = TuyaChargerManager(ev_charger_config, error_callback=self._log_error)
             self.ev_logic = EVChargingLogic(self.ev_charger)
         
@@ -1261,10 +1261,15 @@ class DeyeApp(ctk.CTk):
 
     def _process_ev_charging(self, data: InverterData) -> None:
         """Process EV charger logic (called from background thread)."""
-        if self.ev_logic is None:
-            return
-
         ui_settings = self.ev_panel.get_settings()
+
+        # Lazy init: create charger manager when UI is enabled for the first time
+        if self.ev_logic is None:
+            if ui_settings["enabled"] and ev_charger_config.device_id:
+                self.ev_charger = TuyaChargerManager(ev_charger_config, error_callback=self._log_error)
+                self.ev_logic = EVChargingLogic(self.ev_charger)
+            else:
+                return
         sunset_settings = self.sunset_panel.get_settings()
 
         settings = EVSettings(
@@ -1512,10 +1517,15 @@ class DeyeApp(ctk.CTk):
 
     def _process_heatpump(self, data: InverterData) -> None:
         """Process Tuya heat pump logic (called from background thread)."""
-        if self.hp_logic is None:
-            return
-
         ui_settings = self.heatpump_panel.get_settings()
+
+        # Lazy init: create heatpump manager when UI is enabled for the first time
+        if self.hp_logic is None:
+            if ui_settings["enabled"] and heatpump_config.device_id:
+                self.hp_manager = TuyaHeatpumpManager(heatpump_config, error_callback=self._log_error)
+                self.hp_logic = HeatpumpLogic(self.hp_manager, heatpump_config)
+            else:
+                return
 
         settings = HeatpumpSettings(
             enabled=ui_settings["enabled"],
