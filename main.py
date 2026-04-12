@@ -958,8 +958,8 @@ class DeyeApp(ctk.CTk):
         
         Returns True if settled (OK to adjust), False if still ramping.
         """
-        if self._current_max_charge is None or battery_voltage <= 0:
-            return True  # No prior setting or no voltage reading — allow adjustment
+        if self._current_max_charge is None or self._current_max_charge <= 0 or battery_voltage <= 0:
+            return True  # No prior setting, zero charge, or no voltage reading — allow adjustment
         
         # Only check when battery is actually charging (negative power = charging for Deye)
         if data.battery_power >= 0:
