@@ -251,6 +251,7 @@ class TuyaHeatpumpConfig:
     solar_override_enabled: bool = field(default_factory=lambda: os.getenv("HEATPUMP_SOLAR_OVERRIDE", "true").lower() == "true")
     solar_override_production_min: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_PRODUCTION_MIN", "0")))  # Min PV production watts to trigger ON (0 = disabled)
     solar_override_export_min: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN", "0")))  # Min grid export watts to trigger ON (0 = disabled)
+    solar_override_cloudy_production_min: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_CLOUDY_PRODUCTION_MIN", "0")))  # Cloudy-day PV threshold (0 = disabled)
     solar_override_hp_power: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_HP_POWER", "3000")))  # Approx heat pump consumption (W)
     solar_override_delay: int = field(default_factory=lambda: int(os.getenv("HEATPUMP_SOLAR_OVERRIDE_DELAY", os.getenv("HEATPUMP_SOLAR_OVERRIDE_OFF_DELAY", "60"))))  # Seconds export/import must sustain before solar override activates/deactivates
     # SOC-based override: turn ON when battery is full

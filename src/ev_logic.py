@@ -52,6 +52,7 @@ class EVSettings:
     solar_ramp_down_delay: int = 5    # Minutes: step-down condition must persist this long before acting
     solar_amp_steps: tuple = (8, 16, 24, 32)  # Significant amp levels for ramp-down
     ev_first: bool = False            # True = include battery charge power as available surplus
+    boost: bool = False               # Manual boost: bypass start_soc threshold
 
 
 @dataclass
@@ -144,6 +145,10 @@ class EVChargingLogic:
         # while the car was charging), treat it as "was_charging" so we
         # don't stop a session that's already in progress above stop_soc.
         if charger_state.is_on:
+            self._state.was_charging = True
+
+        # Boost mode: bypass start_soc, treat as if SOC threshold is met
+        if settings.boost and not self._state.was_charging:
             self._state.was_charging = True
 
         if soc < settings.start_soc and not self._state.was_charging:

@@ -39,7 +39,8 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     - **HV dump** — Forces ON (80 °C) when any phase exceeds HV threshold; hysteresis OFF with delay below HV OFF threshold
     - **SOC low** — Forces OFF with configurable delay, then locks out schedule until SOC recovers to ON threshold
     - **SOC high** — Forces ON using the active schedule temperature (not 80 °C) when SOC ≥ ON threshold; deactivates on sustained grid import > 50 % of HP power
-    - **Solar export** — Forces ON (80 °C) when grid export exceeds threshold for a sustained delay period; same delay applies before deactivating on grid import, riding through brief inverter glitches
+    - **Solar export** — Forces ON (80 °C) when grid export or PV production exceeds threshold for a sustained delay period; separate cloudy-day production threshold auto-activates when the sunset module detects a bad weather day
+    - **Boost** — Manual one-click override button to bypass SOC threshold and start immediately (still respects LV shutdown and SOC low safety limits)
   - _Monitoring_: Supports L1, L2, L3, or ANY phase (uses min voltage for LV, max for HV); live "OFF in Xs" / "Recovery in Xs" countdown for all delayed transitions
 - 🔌 **EV Smart Charger (Tuya)** - Intelligent EV charging via a Tuya-enabled charger (e.g. feyree):
   - _Charging modes_:
@@ -51,6 +52,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     - **SOC-gated** — Only starts when SOC ≥ start threshold; stops if it drops to stop threshold
     - **Grid-pull stop** — Stops charging if grid import is sustained for 5+ minutes (battery exhausted)
     - **Safe amp changes** — Stops charger before lowering amps, waits 5 s, then restarts to prevent overcurrent trips
+    - **Boost** — Manual one-click override button to bypass start SOC threshold and begin charging immediately (still respects stop SOC safety limit)
   - _Rate limiting_: Configurable cooldown between any charger state changes
   - _Cloud fallback_: If local connection fails after max retries, automatically switches to Tuya Cloud API control; periodically retries local connection in the background
 - 🔥 **Tapo Smart Plug Outlets** - Automatic consumer control via TP-Link Tapo smart plugs:
@@ -265,13 +267,14 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 **Solar Override:**
 
-| Variable                                 | Description                                                                    | Default |
-| ---------------------------------------- | ------------------------------------------------------------------------------ | ------- |
-| `HEATPUMP_SOLAR_OVERRIDE`                | Enable solar override                                                          | `true`  |
-| `HEATPUMP_SOLAR_OVERRIDE_PRODUCTION_MIN` | Min PV production (W) to trigger ON (0 = disabled)                             | `0`     |
-| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN`     | Min grid export (W) to trigger ON (0 = disabled)                               | `0`     |
-| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`       | HP rated power (W) — stops if grid import > half                               | `3000`  |
-| `HEATPUMP_SOLAR_OVERRIDE_DELAY`          | Seconds export/import must sustain before solar override activates/deactivates | `60`    |
+| Variable                                        | Description                                                                        | Default |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------- | ------- |
+| `HEATPUMP_SOLAR_OVERRIDE`                       | Enable solar override                                                              | `true`  |
+| `HEATPUMP_SOLAR_OVERRIDE_PRODUCTION_MIN`        | Min PV production (W) to trigger ON (0 = disabled)                                 | `0`     |
+| `HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN`            | Min grid export (W) to trigger ON (0 = disabled)                                   | `0`     |
+| `HEATPUMP_SOLAR_OVERRIDE_CLOUDY_PRODUCTION_MIN` | Cloudy-day PV threshold (W) — auto-used when sunset detects bad day (0 = disabled) | `0`     |
+| `HEATPUMP_SOLAR_OVERRIDE_HP_POWER`              | HP rated power (W) — stops if grid import > half                                   | `3000`  |
+| `HEATPUMP_SOLAR_OVERRIDE_DELAY`                 | Seconds export/import must sustain before solar override activates/deactivates     | `60`    |
 
 **SOC Overrides:**
 
@@ -336,33 +339,37 @@ HEATPUMP_SCHEDULE_3=18:00-06:00,28,35       # Evening/night: maintain 28-35°C
 
 #### EV Smart Charger
 
-| Parameter     | Description                                              | Default    |
-| ------------- | -------------------------------------------------------- | ---------- |
-| Enable        | Enable/disable EV charger control                        | Off        |
-| Min Amps      | Minimum charging current                                 | 8A         |
-| Max Amps      | Maximum charging current                                 | 32A        |
-| Start SOC     | Home battery SOC to start EV charging                    | 80%        |
-| Stop SOC      | Home battery SOC to stop EV charging                     | 20%        |
-| Charge by     | Target hour for battery-paced charging (night)           | 7:00       |
-| Cooldown      | Minutes between charger state changes                    | 5 min      |
-| Solar Follow  | Scale amps to match solar surplus (PV minus house loads) | Off        |
-| Grid charge   | Always charge at configured amps while grid is available | Off        |
-| Grid charge A | Amps to use in grid charge mode                          | 20A        |
-| Ramp ↓ delay  | Minutes between solar ramp-down steps                    | 5 min      |
-| Amp steps     | Significant amp levels for ramp-down (comma-separated)   | 8,16,24,32 |
-| Cloud API Key | Tuya IoT Platform Access ID (enables cloud fallback)     |            |
-| Cloud Secret  | Tuya IoT Platform Access Secret                          |            |
-| Cloud Region  | Tuya cloud region (eu, us, cn, in)                       | eu         |
-| Cloud Amps    | Cloud DP code for amps setting (Set32A, Set16A)          | Set32A     |
+| Parameter     | Description                                               | Default    |
+| ------------- | --------------------------------------------------------- | ---------- |
+| Enable        | Enable/disable EV charger control                         | Off        |
+| Min Amps      | Minimum charging current                                  | 8A         |
+| Max Amps      | Maximum charging current                                  | 32A        |
+| Start SOC     | Home battery SOC to start EV charging                     | 80%        |
+| Stop SOC      | Home battery SOC to stop EV charging                      | 20%        |
+| Charge by     | Target hour for battery-paced charging (night)            | 7:00       |
+| Cooldown      | Minutes between charger state changes                     | 5 min      |
+| Solar Follow  | Scale amps to match solar surplus (PV minus house loads)  | Off        |
+| Grid charge   | Always charge at configured amps while grid is available  | Off        |
+| Grid charge A | Amps to use in grid charge mode                           | 20A        |
+| Ramp ↓ delay  | Minutes between solar ramp-down steps                     | 5 min      |
+| Amp steps     | Significant amp levels for ramp-down (comma-separated)    | 8,16,24,32 |
+| Cloud API Key | Tuya IoT Platform Access ID (enables cloud fallback)      |            |
+| Cloud Secret  | Tuya IoT Platform Access Secret                           |            |
+| Cloud Region  | Tuya cloud region (eu, us, cn, in)                        | eu         |
+| Cloud Amps    | Cloud DP code for amps setting (Set32A, Set16A)           | Set32A     |
+| Boost         | Manual override button — bypasses start SOC to charge now | Off        |
 
 ### Heat Pump – Socket Thermostat
 
 | Parameter        | Description                                                                    | Default |
 | ---------------- | ------------------------------------------------------------------------------ | ------- |
 | Solar Override   | Enable/disable solar export override                                           | On      |
-| Trigger W        | Minimum grid export watts to trigger solar override ON                         | 3000W   |
+| Trigger W        | Minimum PV production watts to trigger solar override ON                       | 3000W   |
+| Export W         | Minimum grid export watts to trigger solar override ON                         | 3000W   |
+| ☁ Cloudy W       | Cloudy-day PV threshold — auto-used when sunset module detects bad weather     | 0 (off) |
 | HP Power W       | Heat pump rated power — solar override stops if grid import > half             | 3000W   |
 | Delay s          | Seconds export/import must sustain before solar override activates/deactivates | 60s     |
+| Boost            | Manual override button — bypasses SOC threshold to start immediately           | Off     |
 | SOC ON %         | SOC ≥ this → force ON using schedule temp                                      | 90%     |
 | SOC OFF %        | SOC ≤ this → force OFF with delay + lockout                                    | 30%     |
 | HV ON V          | Voltage threshold to trigger HV dump (80 °C target)                            | 252V    |

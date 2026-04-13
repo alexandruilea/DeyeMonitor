@@ -1287,6 +1287,7 @@ class DeyeApp(ctk.CTk):
             solar_ramp_down_delay=ui_settings.get("solar_ramp_down_delay", 5),
             solar_amp_steps=ui_settings.get("solar_amp_steps", (8, 16, 24, 32)),
             ev_first=ui_settings.get("ev_first", False),
+            boost=ui_settings.get("boost", False),
         )
 
         result, detail = self.ev_logic.process(data, settings)
@@ -1533,6 +1534,7 @@ class DeyeApp(ctk.CTk):
             solar_override_enabled=ui_settings["solar_override_enabled"],
             solar_override_production_min=ui_settings["solar_override_production_min"],
             solar_override_export_min=ui_settings["solar_override_export_min"],
+            solar_override_cloudy_production_min=ui_settings.get("solar_override_cloudy_production_min", 0),
             solar_override_hp_power=ui_settings["solar_override_hp_power"],
             solar_override_delay=ui_settings["solar_override_delay"],
             soc_on_threshold=ui_settings["soc_on_threshold"],
@@ -1543,9 +1545,11 @@ class DeyeApp(ctk.CTk):
             lv_recovery_voltage=ui_settings["lv_recovery_voltage"],
             lv_recovery_delay=ui_settings["lv_recovery_delay"],
             phase_change_delay=ui_settings["phase_change_delay"],
+            boost=ui_settings.get("boost", False),
         )
 
-        result, detail = self.hp_logic.process(settings, data.grid_power, data.soc, data.voltages, data.pv_power)
+        is_bad_day = self._cloud_boost_factor > 1.0
+        result, detail = self.hp_logic.process(settings, data.grid_power, data.soc, data.voltages, data.pv_power, is_bad_day=is_bad_day)
         hp_state = self.hp_manager.get_state()
 
         # Log only on state transitions (ignore detail changes within the same state)
@@ -1554,7 +1558,8 @@ class DeyeApp(ctk.CTk):
             if result in (HeatpumpResult.SCHEDULE_ACTIVE, HeatpumpResult.SOLAR_OVERRIDE,
                           HeatpumpResult.SOC_OVERRIDE, HeatpumpResult.HV_OVERRIDE,
                           HeatpumpResult.LV_SHUTDOWN, HeatpumpResult.SOC_LOW,
-                          HeatpumpResult.NO_SCHEDULE, HeatpumpResult.OFFLINE):
+                          HeatpumpResult.NO_SCHEDULE, HeatpumpResult.OFFLINE,
+                          HeatpumpResult.BOOST):
                 self._log_error(f"HP: {result.value} ({detail})")
 
         self.after(0, lambda: self.heatpump_panel.update_hp_state(

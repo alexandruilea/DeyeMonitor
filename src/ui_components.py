@@ -1512,6 +1512,15 @@ class EVChargerPanel(ctk.CTkFrame):
         if ev_charger_config.enabled:
             self.enable_switch.select()
 
+        self.boost_var = ctk.BooleanVar(value=False)
+        self.boost_btn = ctk.CTkButton(
+            header, text="\u26A1 Boost", width=90, height=28,
+            fg_color="#555555", hover_color="#D35400",
+            font=("Roboto", 11, "bold"),
+            command=self._on_boost_click
+        )
+        self.boost_btn.grid(row=0, column=2, padx=10)
+
         _startup = ev_charger_config.enabled
         self.lbl_status = ctk.CTkLabel(
             header,
@@ -1519,7 +1528,7 @@ class EVChargerPanel(ctk.CTkFrame):
             font=("Roboto", 11),
             text_color="#2ECC71" if _startup else "gray"
         )
-        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        self.lbl_status.grid(row=0, column=3, sticky="e", padx=10)
 
         # ── Settings row 1: amps, SOC thresholds ────────────────────
         sf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -1667,6 +1676,14 @@ class EVChargerPanel(ctk.CTkFrame):
         if self.on_settings_change:
             self.on_settings_change()
 
+    def _on_boost_click(self) -> None:
+        current = self.boost_var.get()
+        self.boost_var.set(not current)
+        if not current:
+            self.boost_btn.configure(fg_color="#E67E22", text="\u26A1 BOOST ON")
+        else:
+            self.boost_btn.configure(fg_color="#555555", text="\u26A1 Boost")
+
     # ── Public API ───────────────────────────────────────────────────
 
     def is_enabled(self) -> bool:
@@ -1689,6 +1706,7 @@ class EVChargerPanel(ctk.CTkFrame):
                 "solar_ramp_down_delay": int(self.ramp_down_delay.get()),
                 "solar_amp_steps": tuple(int(x.strip()) for x in self.amp_steps.get().split(",")),
                 "ev_first": self.ev_first_var.get(),
+                "boost": self.boost_var.get(),
             }
         except (ValueError, TypeError):
             return {
@@ -1705,6 +1723,7 @@ class EVChargerPanel(ctk.CTkFrame):
                 "solar_ramp_down_delay": ev_charger_config.solar_ramp_down_delay,
                 "solar_amp_steps": ev_charger_config.solar_amp_steps,
                 "ev_first": False,
+                "boost": False,
             }
     def update_ev_state(self, connected: bool, is_on: bool, charging: bool,
                         error_state: str, current_amps: int, result_text: str,
@@ -1887,6 +1906,15 @@ class HeatpumpPanel(ctk.CTkFrame):
         if heatpump_config.enabled:
             self.enable_switch.select()
 
+        self.boost_var = ctk.BooleanVar(value=False)
+        self.boost_btn = ctk.CTkButton(
+            header, text="\u26A1 Boost", width=90, height=28,
+            fg_color="#555555", hover_color="#D35400",
+            font=("Roboto", 11, "bold"),
+            command=self._on_boost_click
+        )
+        self.boost_btn.grid(row=0, column=2, padx=10)
+
         _startup = heatpump_config.enabled
         self.lbl_status = ctk.CTkLabel(
             header,
@@ -1894,7 +1922,7 @@ class HeatpumpPanel(ctk.CTkFrame):
             font=("Roboto", 11),
             text_color="#2ECC71" if _startup else "gray"
         )
-        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        self.lbl_status.grid(row=0, column=3, sticky="e", padx=10)
 
         # ── Settings row: solar override ────────────────────────────
         sf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -1937,6 +1965,13 @@ class HeatpumpPanel(ctk.CTkFrame):
         self.solar_delay.grid(row=0, column=11, padx=2, pady=8, sticky="w")
         self.solar_delay.insert(0, str(heatpump_config.solar_override_delay))
         ctk.CTkLabel(sf, text="s", font=("Roboto", 10)).grid(row=0, column=12, padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(sf, text="\u2601 Cloudy:", font=("Roboto", 10, "bold"),
+                      text_color="#3498DB").grid(row=0, column=13, padx=(10, 2), pady=8, sticky="e")
+        self.solar_cloudy_production = ctk.CTkEntry(sf, width=60, justify="center")
+        self.solar_cloudy_production.grid(row=0, column=14, padx=2, pady=8, sticky="w")
+        self.solar_cloudy_production.insert(0, str(heatpump_config.solar_override_cloudy_production_min))
+        ctk.CTkLabel(sf, text="W", font=("Roboto", 10)).grid(row=0, column=15, padx=(0, 10), pady=8)
 
         # ── Settings row: SOC & Voltage overrides ───────────────────
         vf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -2087,6 +2122,14 @@ class HeatpumpPanel(ctk.CTkFrame):
         if self.on_settings_change:
             self.on_settings_change()
 
+    def _on_boost_click(self) -> None:
+        current = self.boost_var.get()
+        self.boost_var.set(not current)
+        if not current:
+            self.boost_btn.configure(fg_color="#E67E22", text="\u26A1 BOOST ON")
+        else:
+            self.boost_btn.configure(fg_color="#555555", text="\u26A1 Boost")
+
     # ── Public API ───────────────────────────────────────────────────
 
     def is_enabled(self) -> bool:
@@ -2113,6 +2156,7 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "solar_override_enabled": self.solar_override_var.get(),
                 "solar_override_production_min": int(self.solar_production_min.get()),
                 "solar_override_export_min": int(self.solar_export_min.get()),
+                "solar_override_cloudy_production_min": int(self.solar_cloudy_production.get()),
                 "solar_override_hp_power": int(self.solar_hp_power.get()),
                 "solar_override_delay": int(self.solar_delay.get()),
                 "soc_on_threshold": int(self.soc_on_entry.get()),
@@ -2123,6 +2167,7 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "lv_recovery_voltage": float(self.lv_recovery_entry.get()),
                 "lv_recovery_delay": int(self.lv_recovery_delay_entry.get()),
                 "phase_change_delay": int(self.phase_delay_entry.get()),
+                "boost": self.boost_var.get(),
             }
         except (ValueError, TypeError):
             return {
@@ -2131,6 +2176,7 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "solar_override_enabled": heatpump_config.solar_override_enabled,
                 "solar_override_production_min": heatpump_config.solar_override_production_min,
                 "solar_override_export_min": heatpump_config.solar_override_export_min,
+                "solar_override_cloudy_production_min": heatpump_config.solar_override_cloudy_production_min,
                 "solar_override_hp_power": heatpump_config.solar_override_hp_power,
                 "solar_override_delay": heatpump_config.solar_override_delay,
                 "soc_on_threshold": heatpump_config.soc_on_threshold,
@@ -2141,6 +2187,7 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "lv_recovery_voltage": heatpump_config.lv_recovery_voltage,
                 "lv_recovery_delay": heatpump_config.lv_recovery_delay,
                 "phase_change_delay": heatpump_config.phase_change_delay,
+                "boost": False,
             }
 
     def update_hp_state(self, connected: bool, is_on: bool, temperature: float,
@@ -2168,6 +2215,7 @@ class HeatpumpPanel(ctk.CTkFrame):
             "HP: Schedule Active": "#2ECC71",
             "HP: Solar Override": "#1ABC9C",
             "HP: SOC Override": "#2ECC71",
+            "HP: Boost": "#E67E22",
             "HP: HV Override": "#00FFFF",
             "HP: LV Shutdown": "#E74C3C",
             "HP: SOC Low": "#E74C3C",

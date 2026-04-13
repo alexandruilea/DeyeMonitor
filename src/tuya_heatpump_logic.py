@@ -32,6 +32,7 @@ class HeatpumpResult(Enum):
     HV_OVERRIDE = "HP: HV Override"
     LV_SHUTDOWN = "HP: LV Shutdown"
     SOC_LOW = "HP: SOC Low"
+    BOOST = "HP: Boost"
     STANDBY = "HP: Standby"
 
 
@@ -43,6 +44,7 @@ class HeatpumpSettings:
     solar_override_enabled: bool = True
     solar_override_production_min: int = 0   # Min PV production watts to trigger ON (0 = disabled)
     solar_override_export_min: int = 0       # Min grid export watts to trigger ON (0 = disabled)
+    solar_override_cloudy_production_min: int = 0  # Cloudy-day PV production threshold (0 = disabled)
     solar_override_hp_power: int = 3000    # HP rated power (W)
     solar_override_delay: int = 60         # Seconds export/import must sustain before solar override activates/deactivates
     # SOC-based override
@@ -55,6 +57,7 @@ class HeatpumpSettings:
     lv_recovery_voltage: float = 220.0     # Voltage must exceed this for LV recovery
     lv_recovery_delay: int = 300           # Seconds voltage must stay above recovery level
     phase_change_delay: int = 10           # Seconds before voltage triggers activate
+    boost: bool = False                    # Manual boost: bypass SOC threshold
 
 
 class HeatpumpLogic:
@@ -127,7 +130,8 @@ class HeatpumpLogic:
         self._solar_off_timer_start = None
 
     def process(self, settings: HeatpumpSettings, grid_power: int, soc: int,
-                voltages: Optional[List[float]] = None, pv_power: int = 0) -> tuple:
+                voltages: Optional[List[float]] = None, pv_power: int = 0,
+                is_bad_day: bool = False) -> tuple:
         """
         Process heat pump logic.
 
@@ -300,11 +304,17 @@ class HeatpumpLogic:
         # ── 4. Evaluate solar override conditions ─────────────
         # Evaluated before SOC/schedule returns so solar can boost the target
         # when SOC override is also active.
+        # On bad weather days (detected by sunset module), use the lower
+        # cloudy-day production threshold so the HP runs on moderate PV.
         if settings.solar_override_enabled:
             if not self._solar_override_active:
                 self._solar_off_timer_start = None
+                # Determine effective production threshold
+                prod_threshold = settings.solar_override_production_min
+                if is_bad_day and settings.solar_override_cloudy_production_min > 0:
+                    prod_threshold = settings.solar_override_cloudy_production_min
                 # Require sustained production OR export for delay seconds before activating
-                production_met = settings.solar_override_production_min > 0 and pv_power >= settings.solar_override_production_min
+                production_met = prod_threshold > 0 and pv_power >= prod_threshold
                 export_met = settings.solar_override_export_min > 0 and export_watts >= settings.solar_override_export_min
                 if production_met or export_met:
                     if self._solar_on_timer_start is None:
@@ -329,11 +339,13 @@ class HeatpumpLogic:
                 else:
                     self._solar_off_timer_start = None
 
-        # ── 5. SOC high → apply schedule (or solar override target) ────
+        # ── 5. SOC high / Boost → apply schedule (or solar override target) ────
         # Once active, stays ON until SOC drops to soc_off_threshold (priority 3)
         # or grid import exceeds 50% of HP power (sustained for delay).
         # If solar override is also active, uses the higher solar target instead.
+        # Boost mode: bypass SOC threshold, still respect SOC low and LV shutdown.
         max_grid_import = settings.solar_override_hp_power / 2
+        boost_active = settings.boost and soc > settings.soc_off_threshold and not self._soc_low_lockout
         if not self._soc_override_active:
             self._soc_off_timer_start = None
             if soc >= settings.soc_on_threshold:
@@ -348,7 +360,7 @@ class HeatpumpLogic:
             else:
                 self._soc_off_timer_start = None
 
-        if self._soc_override_active:
+        if self._soc_override_active or boost_active:
             # If solar override is also active, boost to solar target
             if self._solar_override_active:
                 countdown = ""
@@ -356,7 +368,8 @@ class HeatpumpLogic:
                     remaining = settings.solar_override_delay - (time.time() - self._solar_off_timer_start)
                     countdown = f" | OFF in {remaining:.0f}s"
                 self._apply_target(override_target, 0.5)
-                return HeatpumpResult.SOLAR_OVERRIDE, (
+                result = HeatpumpResult.BOOST if boost_active and not self._soc_override_active else HeatpumpResult.SOLAR_OVERRIDE
+                return result, (
                     f"{temperature:.1f}°C | {dev_target} | {v_str} | "
                     f"PV {pv_power}W | Export {export_watts}W | Grid {grid_import}W | SOC {soc}% | Target\u2192{override_target}\u00b0C{countdown}"
                 )
@@ -372,9 +385,11 @@ class HeatpumpLogic:
                 soc_target = standby_target
                 soc_hyst = 0.5
             self._apply_target(soc_target, soc_hyst)
-            return HeatpumpResult.SOC_OVERRIDE, (
+            result = HeatpumpResult.BOOST if boost_active and not self._soc_override_active else HeatpumpResult.SOC_OVERRIDE
+            boost_tag = "BOOST | " if boost_active and not self._soc_override_active else ""
+            return result, (
                 f"{temperature:.1f}°C | {dev_target} | {v_str} | "
-                f"SOC {soc}% (ON ≥ {settings.soc_on_threshold}%) | Grid {grid_import}W | Target→{soc_target}°C{countdown}"
+                f"{boost_tag}SOC {soc}% (ON ≥ {settings.soc_on_threshold}%) | Grid {grid_import}W | Target→{soc_target}°C{countdown}"
             )
 
         # ── 6. Solar override (standalone, SOC not active) ──────
