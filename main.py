@@ -1145,8 +1145,10 @@ class DeyeApp(ctk.CTk):
         - Inverter is barely charging the battery (<20% of expected power)
         - Power is being exported to grid (grid_power < -500W)
         
-        When triggered, switches to zero-export mode. Restores previous mode
-        when the condition clears (battery charging properly or SOC >= 80%).
+        When triggered, switches to zero-export mode + sell OFF + max charge.
+        Restores previous mode when the condition clears (battery charging
+        properly or SOC >= 80%). Charge speed is NOT restored — the
+        schedule/sunset logic will recalculate it on the next cycle.
         """
         soc_threshold = 80
         charge_utilization_pct = 20  # actual vs expected
@@ -1191,7 +1193,7 @@ class DeyeApp(ctk.CTk):
                 remaining = int(self._export_leak_debounce_sec - elapsed)
                 self._update_sell_label(True, remaining, switching_to_off=True)
                 return
-            # Debounce elapsed — force zero-export + sell OFF
+            # Debounce elapsed — force zero-export + sell OFF + max charge
             self._export_leak_condition_since = None
             self._export_leak_original_mode = self._current_work_mode
             target_mode = deye_config.zero_export_mode
@@ -1202,9 +1204,17 @@ class DeyeApp(ctk.CTk):
                     mode_changed = True
             # Disable solar sell to prevent grid export
             sell_disabled = self.inverter.set_solar_sell(False)
-            if mode_changed or sell_disabled:
+            # Boost charging to max so battery absorbs AC-coupled inverter output
+            max_charge = deye_config.max_charge_amps_limit
+            charge_boosted = False
+            if self._current_max_charge != max_charge:
+                if self.inverter.set_max_charge_current(max_charge):
+                    self._current_max_charge = max_charge
+                    self._update_charge_display()
+                    charge_boosted = True
+            if mode_changed or sell_disabled or charge_boosted:
                 self._log_error(
-                    f"Export leak: Forced zero-export + sell OFF (SOC={data.soc}%, "
+                    f"Export leak: Forced zero-export + sell OFF + max charge {max_charge}A (SOC={data.soc}%, "
                     f"charging {actual_charge_w}W/{expected_charge_w:.0f}W, "
                     f"exporting {abs(data.grid_power)}W)")
             self._export_leak_forced_zero_export = True
