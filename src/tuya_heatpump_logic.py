@@ -326,10 +326,17 @@ class HeatpumpLogic:
                     self._solar_on_timer_start = None
             else:
                 self._solar_on_timer_start = None
-                # Stop if grid import exceeds 50% of HP power (sustained for delay)
+                # Stop if grid import exceeds 50% of HP power OR solar conditions
+                # are no longer met (sustained for delay).
                 # SOC-based stop is handled by priority 3 (SOC low → force OFF)
                 max_grid_import_solar = settings.solar_override_hp_power / 2
-                should_stop = grid_import > max_grid_import_solar
+                # Re-evaluate original trigger conditions
+                prod_threshold = settings.solar_override_production_min
+                if is_bad_day and settings.solar_override_cloudy_production_min > 0:
+                    prod_threshold = settings.solar_override_cloudy_production_min
+                production_still_met = prod_threshold > 0 and pv_power >= prod_threshold
+                export_still_met = settings.solar_override_export_min > 0 and export_watts >= settings.solar_override_export_min
+                should_stop = grid_import > max_grid_import_solar or (not production_still_met and not export_still_met)
                 if should_stop:
                     if self._solar_off_timer_start is None:
                         self._solar_off_timer_start = time.time()
