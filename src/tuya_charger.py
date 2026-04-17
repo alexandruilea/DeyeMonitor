@@ -377,7 +377,7 @@ class TuyaChargerManager:
         )
         if not result.get("success"):
             self.state.is_connected = False
-            return
+            raise ConnectionError(f"Cloud API returned: {result.get('msg', 'no success')}")
 
         props = {}
         for p in result.get("result", {}).get("properties", []):
