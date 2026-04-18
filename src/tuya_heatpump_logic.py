@@ -291,8 +291,9 @@ class HeatpumpLogic:
             self._soc_low_timer_start = None
 
         # SOC low lockout: stay off until SOC reaches soc_on_threshold
+        # Boost mode bypasses the lockout (SOC already confirmed > soc_off_threshold above)
         if self._soc_low_lockout:
-            if soc >= settings.soc_on_threshold:
+            if soc >= settings.soc_on_threshold or settings.boost:
                 self._soc_low_lockout = False
             else:
                 self._apply_target(standby_target, 0.5)
