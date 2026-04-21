@@ -45,8 +45,6 @@ class TuyaHeatpumpManager:
         self._pending_hysteresis: Optional[float] = None  # Desired hysteresis (°C)
         self._pending_mode: Optional[str] = None  # Desired mode (heat/cool)
         self._retry_count = 0
-        self._max_retries = 10
-        self._permanent_failure = False
         self._last_error_logged = False
         self._known_dps: dict = {}
 
@@ -89,21 +87,7 @@ class TuyaHeatpumpManager:
         """Background thread: connect, poll status, apply pending commands."""
         while self._running:
             try:
-                if self._permanent_failure:
-                    time.sleep(5)
-                    continue
-
                 if self._device is None:
-                    if self._retry_count >= self._max_retries:
-                        self._permanent_failure = True
-                        self.state.is_connected = False
-                        if self.error_callback and not self._last_error_logged:
-                            self.error_callback(
-                                f"[{self.config.name}] FAILED - Stopped retrying after "
-                                f"{self._max_retries} attempts."
-                            )
-                            self._last_error_logged = True
-                        continue
                     self._connect()
 
                 if self._device is None:
