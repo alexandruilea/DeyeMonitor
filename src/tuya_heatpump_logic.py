@@ -307,7 +307,12 @@ class HeatpumpLogic:
         # when SOC override is also active.
         # On bad weather days (detected by sunset module), use the lower
         # cloudy-day production threshold so the HP runs on moderate PV.
-        if settings.solar_override_enabled:
+        if not settings.solar_override_enabled:
+            # Clear stale state immediately when the feature is toggled off
+            self._solar_override_active = False
+            self._solar_on_timer_start = None
+            self._solar_off_timer_start = None
+        else:
             if not self._solar_override_active:
                 self._solar_off_timer_start = None
                 # Determine effective production threshold
