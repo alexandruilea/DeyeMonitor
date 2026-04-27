@@ -165,6 +165,16 @@ class EVChargingLogic:
             status = "Charging" if charger_state.is_on else "Idle"
             return EVResult.WAITING_COOLDOWN, f"{status}, next change in {remaining}s"
 
+        # ── No car drawing → don't churn the charger's flash ─────────
+        # If the charger is ON but no car is actually charging (unplugged
+        # or finished session), skip recomputing/writing target amps every
+        # cycle. We still respond instantly when the car plugs in because
+        # is_charging flips True and the cooldown is not reset here.
+        if charger_state.is_on and not charger_state.is_charging:
+            self._state.step_down_since = 0
+            self._state.was_charging = False
+            return EVResult.IDLE, f"Ready {charger_state.current_amps}A (no car)"
+
         # ── Solar-follow mode ────────────────────────────────────────
         if settings.solar_mode:
             return self._process_solar(data, settings, charger_state, now)

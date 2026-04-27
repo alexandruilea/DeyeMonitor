@@ -128,6 +128,11 @@ class DeyeApp(ctk.CTk):
         self._sunset_active = False  # Whether sunset charging is actively boosting
         self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
 
+        # Off-grid charge boost: when grid is disconnected, multiply the final
+        # charge target (base + protection + sunset) by 1.5 right before the
+        # inverter/BMS caps. Cleared automatically when the grid recovers.
+        self._offgrid_active = False  # Whether off-grid 50% boost is currently applied
+
         # Anti-export leakage: force zero-export when inverter ignores charge setting
         self._export_leak_forced_zero_export = False  # Whether we forced zero-export mode
         self._export_leak_original_mode = None  # Work mode to restore when condition clears
@@ -476,7 +481,7 @@ class DeyeApp(ctk.CTk):
             
             threading.Thread(target=apply_defaults, daemon=True).start()
 
-    def _process_schedule(self) -> None:
+    def _process_schedule(self, data: 'InverterData' = None) -> None:
         """Process time-based charge/sell schedule and apply settings if needed."""
         if not self.schedule_panel.is_enabled():
             # Schedule is disabled, nothing to do
@@ -484,6 +489,20 @@ class DeyeApp(ctk.CTk):
             return
         
         active_schedule = self.schedule_panel.get_active_schedule()
+
+        # Track grid state for the off-grid 50% multiplier (applied last, before caps).
+        is_grid_connected = data.is_grid_connected if data is not None else True
+        new_offgrid_active = not is_grid_connected
+        if new_offgrid_active != self._offgrid_active:
+            if new_offgrid_active:
+                print("[OFFGRID] Grid lost - applying 50% charge boost (over sunset)")
+                self._log_error("Grid lost - charge boost +50%")
+            else:
+                print("[OFFGRID] Grid recovered - clearing 50% charge boost")
+                self._log_error("Grid recovered - charge boost cleared")
+            self._offgrid_active = new_offgrid_active
+            # Force re-application so the new effective target is written immediately
+            self._last_applied_schedule = None
         
         # Update UI status
         self.after(0, lambda: self.schedule_panel.update_status(active_schedule))
@@ -515,11 +534,15 @@ class DeyeApp(ctk.CTk):
             target_sell = defaults.get("sell", False)
             target_sell_power = defaults.get("sell_power", 0)
             schedule_key = ("default", target_max, target_grid, target_discharge, target_sell, target_sell_power)
+
+        # Include off-grid flag in the cache key so a grid transition forces a write
+        schedule_key = schedule_key + ("og", self._offgrid_active)
         
         # Only apply if settings changed — but also re-apply if the register
         # is out of sync (e.g. a previous write failed)
-        effective_target_max = target_max + self._protection_boost_amps + self._sunset_boost_amps
-        effective_target_max = min(effective_target_max, deye_config.max_charge_amps_limit)
+        effective_target_max = self._apply_charge_caps(
+            target_max + self._protection_boost_amps + self._sunset_boost_amps
+        )
         register_in_sync = (self._current_max_charge == effective_target_max and
                             self._current_grid_charge == target_grid and
                             self._current_max_discharge == target_discharge)
@@ -539,8 +562,10 @@ class DeyeApp(ctk.CTk):
         all_success = True
         
         # Only write max charge if it changed — but respect active sunset/protection boosts
-        effective_target_max = target_max + self._protection_boost_amps + self._sunset_boost_amps
-        effective_target_max = min(effective_target_max, deye_config.max_charge_amps_limit)
+        # plus the off-grid 50% multiplier (applied last, before the inverter cap).
+        effective_target_max = self._apply_charge_caps(
+            target_max + self._protection_boost_amps + self._sunset_boost_amps
+        )
         if self._current_max_charge != effective_target_max:
             if self.inverter.set_max_charge_current(effective_target_max):
                 self._current_max_charge = effective_target_max
@@ -606,6 +631,20 @@ class DeyeApp(ctk.CTk):
                 self._log_error(f"Defaults applied: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
         else:
             self._log_error(f"Failed to apply charge settings")
+
+    def _apply_charge_caps(self, amps: int, bms_limit: int = 0) -> int:
+        """Apply the off-grid 50% multiplier (if active) then clamp to inverter and BMS caps.
+
+        This is the final stage applied to any computed max-charge target so the
+        off-grid boost stacks on top of all other boosts (schedule + protection +
+        sunset) without changing how those values are tracked internally.
+        """
+        if self._offgrid_active:
+            amps = int(round(amps * 1.5))
+        amps = min(amps, deye_config.max_charge_amps_limit)
+        if bms_limit > 0:
+            amps = min(amps, bms_limit)
+        return max(0, amps)
 
     def _update_charge_display(self) -> None:
         """Update the charge settings display label."""
@@ -881,7 +920,8 @@ class DeyeApp(ctk.CTk):
         # Compare with current base charge rate
         base_charge = self._get_base_charge_amps()
         
-        # Add any existing protection boost
+        # Add any existing protection boost. The off-grid 50% boost is applied
+        # last (in _apply_charge_caps) so we don't include it here.
         effective_charge = base_charge + self._protection_boost_amps
         
         if required_amps > effective_charge:
@@ -892,9 +932,11 @@ class DeyeApp(ctk.CTk):
             # Round to 10A steps to avoid writing every single amp change
             sunset_boost = ((sunset_boost + 9) // 10) * 10
             
-            # Also retry if boost is set but register doesn't match (failed write recovery)
-            expected_charge = base_charge + self._protection_boost_amps + sunset_boost
-            expected_charge = min(expected_charge, deye_config.max_charge_amps_limit)
+            # Also retry if boost is set but register doesn't match (failed write recovery).
+            # Off-grid multiplier is applied as the very last step.
+            expected_charge = self._apply_charge_caps(
+                base_charge + self._protection_boost_amps + sunset_boost
+            )
             needs_write = (sunset_boost != self._sunset_boost_amps or
                            (self._sunset_active and self._current_max_charge != expected_charge))
             
@@ -910,8 +952,9 @@ class DeyeApp(ctk.CTk):
                 
                 peak_info = f"peak={peak_hour:.1f}h" if peak_hour > 0 else "peak=auto"
                 src_info = f"forecast q={day_quality:.0%}" if forecast_active else peak_info
+                offgrid_str = " x1.5 (off-grid)" if self._offgrid_active else ""
                 print(f"[SUNSET] Boosting: Base={base_charge}A + Protection={self._protection_boost_amps}A"
-                      f" + Sunset={sunset_boost}A = {target_charge}A"
+                      f" + Sunset={sunset_boost}A{offgrid_str} = {target_charge}A"
                       f" (need {remaining_ah:.0f}Ah in {hours_left:.1f}h, weight={current_weight:.2f},"
                       f" {src_info}, SOC {current_soc}%→{target_soc}%)")
                 
@@ -1074,7 +1117,10 @@ class DeyeApp(ctk.CTk):
                 self._protection_boost_amps = new_boost
                 self._protection_active = True
                 self._last_protection_adjustment = current_time
-                target_charge = base_charge + self._protection_boost_amps
+                target_charge = self._apply_charge_caps(
+                    base_charge + self._protection_boost_amps,
+                    bms_limit=data.bms_charge_current_limit,
+                )
                 
                 step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
                 print(f"[PROTECTION] BOOST ({step_type} +{step}A): Base={base_charge}A + Boost={self._protection_boost_amps}A = {target_charge}A "
@@ -1114,7 +1160,10 @@ class DeyeApp(ctk.CTk):
                 if new_boost != self._protection_boost_amps:
                     self._protection_boost_amps = new_boost
                     self._last_protection_adjustment = current_time
-                    target_charge = base_charge + self._protection_boost_amps
+                    target_charge = self._apply_charge_caps(
+                        base_charge + self._protection_boost_amps,
+                        bms_limit=data.bms_charge_current_limit,
+                    )
                     
                     step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
                     if self._protection_boost_amps == 0:
@@ -1387,7 +1436,7 @@ class DeyeApp(ctk.CTk):
                     self.after(0, self._update_dashboard, data)
                     self._process_logic(data)
                     # Process time-based charge schedule
-                    self._process_schedule()
+                    self._process_schedule(data)
                     # Process overpower protection (may override schedule charge values)
                     self._process_overpower_protection(data)
                     # Process sunset charging (may further boost if needed to reach target by sunset)

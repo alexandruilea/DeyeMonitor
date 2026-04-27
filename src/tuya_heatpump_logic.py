@@ -84,6 +84,7 @@ class HeatpumpLogic:
         self._soc_off_timer_start: Optional[float] = None
         self._solar_on_timer_start: Optional[float] = None
         self._solar_off_timer_start: Optional[float] = None
+        self._last_active_slot_key: Optional[tuple] = None
 
     @staticmethod
     def _get_active_schedule(schedules: List[HeatpumpScheduleSlot]) -> Optional[HeatpumpScheduleSlot]:
@@ -128,6 +129,7 @@ class HeatpumpLogic:
         self._soc_off_timer_start = None
         self._solar_on_timer_start = None
         self._solar_off_timer_start = None
+        self._last_active_slot_key = None
 
     def process(self, settings: HeatpumpSettings, grid_power: int, soc: int,
                 voltages: Optional[List[float]] = None, pv_power: int = 0,
@@ -185,6 +187,19 @@ class HeatpumpLogic:
             v_str = "--V"
 
         active_slot = self._get_active_schedule(settings.schedules)
+        # Clear latched SOC override when the active schedule slot changes
+        # (e.g. day slot ends and night slot begins). This prevents the
+        # override from carrying its high temp target into a new slot.
+        slot_key = (
+            (active_slot.start_hour, active_slot.start_min,
+             active_slot.end_hour, active_slot.end_min)
+            if active_slot is not None else None
+        )
+        if slot_key != self._last_active_slot_key:
+            if self._soc_override_active:
+                self._soc_override_active = False
+                self._soc_off_timer_start = None
+            self._last_active_slot_key = slot_key
         export_watts = abs(grid_power) if grid_power < 0 else 0
         grid_import = grid_power if grid_power > 0 else 0
         dev_target = f"Dev {state.target_temp:.0f}°C" if state.target_temp is not None else "Dev --°C"
@@ -268,6 +283,11 @@ class HeatpumpLogic:
         # After delay seconds, force OFF and lock out schedule
         # until SOC recovers to soc_on_threshold.
         if soc <= settings.soc_off_threshold:
+            # Clear the latched SOC override immediately; the OFF action
+            # itself is still gated by the delay below.
+            if self._soc_override_active:
+                self._soc_override_active = False
+                self._soc_off_timer_start = None
             if self._soc_low_timer_start is None:
                 self._soc_low_timer_start = time.time()
             elapsed = time.time() - self._soc_low_timer_start
