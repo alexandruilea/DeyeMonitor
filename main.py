@@ -1080,6 +1080,17 @@ class DeyeApp(ctk.CTk):
         voltage_hold_margin = settings.get("voltage_hold_margin", protection_config.voltage_hold_margin)
         voltage_held = max_voltage >= (voltage_warning - voltage_hold_margin)
         can_recover = (export_power < power_recovery_threshold) and (max_voltage < voltage_recovery) and not voltage_held
+
+        # At high SOC (≥95%) the battery is nearly full — boosting hard to absorb
+        # export would race it to 100% and then leave nowhere for PV to go.
+        # Back off: suppress any new boost and force recovery instead.
+        # forced_recovery=True also bypasses _is_charge_speed_settled during
+        # the ramp-down, because near-full BMS throttles actual charge current
+        # far below the register value — the settled check would never pass.
+        forced_recovery = data.soc >= 95 and self._protection_boost_amps > 0
+        if data.soc >= 95 and needs_boost:
+            needs_boost = False
+            can_recover = True
         
         base_charge = self._get_base_charge_amps()
         max_charge_limit = deye_config.max_charge_amps_limit
@@ -1146,8 +1157,11 @@ class DeyeApp(ctk.CTk):
                     self._protection_active = False
                     self._last_protection_adjustment = current_time
             else:
-                # Verify inverter has caught up before reducing further
-                if not self._is_charge_speed_settled(data, battery_voltage):
+                # Verify inverter has caught up before reducing further.
+                # Skip this check for SOC-forced recovery: near-full BMS throttles
+                # actual charge current well below the register value, so the
+                # settled check would never pass and recovery would be permanently blocked.
+                if not forced_recovery and not self._is_charge_speed_settled(data, battery_voltage):
                     self.after(0, lambda: self.protection_panel.update_protection_state(
                         self._protection_active, self._protection_boost_amps
                     ))
