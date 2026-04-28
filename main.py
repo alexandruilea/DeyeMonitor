@@ -1092,10 +1092,14 @@ class DeyeApp(ctk.CTk):
                 ))
                 return
             
+            # Include any active sunset boost so protection's write doesn't
+            # transiently clobber the sunset-driven charge target.
+            sunset_boost = self._sunset_boost_amps if self._sunset_active else 0
+
             # BMS charge limit check: if the BMS reports a charge current limit,
             # don't boost beyond what the BMS will accept
             if data.bms_charge_current_limit > 0:
-                target_after_boost = base_charge + self._protection_boost_amps + charge_step
+                target_after_boost = base_charge + sunset_boost + self._protection_boost_amps + charge_step
                 if target_after_boost > data.bms_charge_current_limit:
                     self.after(0, lambda: self.protection_panel.update_protection_state(
                         self._protection_active, self._protection_boost_amps, bms_limited=True
@@ -1109,21 +1113,21 @@ class DeyeApp(ctk.CTk):
             proportional_step = ((proportional_step + charge_step // 2) // charge_step) * charge_step
             step = max(charge_step, proportional_step)
             
-            new_boost = min(self._protection_boost_amps + step, max_charge_limit - base_charge)
+            new_boost = min(self._protection_boost_amps + step, max_charge_limit - base_charge - sunset_boost)
             # Cap at BMS charge current limit if available
             if data.bms_charge_current_limit > 0:
-                new_boost = min(new_boost, max(0, data.bms_charge_current_limit - base_charge))
+                new_boost = min(new_boost, max(0, data.bms_charge_current_limit - base_charge - sunset_boost))
             if new_boost != self._protection_boost_amps:
                 self._protection_boost_amps = new_boost
                 self._protection_active = True
                 self._last_protection_adjustment = current_time
                 target_charge = self._apply_charge_caps(
-                    base_charge + self._protection_boost_amps,
+                    base_charge + sunset_boost + self._protection_boost_amps,
                     bms_limit=data.bms_charge_current_limit,
                 )
                 
                 step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
-                print(f"[PROTECTION] BOOST ({step_type} +{step}A): Base={base_charge}A + Boost={self._protection_boost_amps}A = {target_charge}A "
+                print(f"[PROTECTION] BOOST ({step_type} +{step}A): Base={base_charge}A + Sunset={sunset_boost}A + Boost={self._protection_boost_amps}A = {target_charge}A "
                       f"(Export={export_power}W/{max_sell}W, MaxV={max_voltage:.1f}V)")
                 
                 if self.inverter.set_max_charge_current(target_charge):
@@ -1160,8 +1164,9 @@ class DeyeApp(ctk.CTk):
                 if new_boost != self._protection_boost_amps:
                     self._protection_boost_amps = new_boost
                     self._last_protection_adjustment = current_time
+                    sunset_boost = self._sunset_boost_amps if self._sunset_active else 0
                     target_charge = self._apply_charge_caps(
-                        base_charge + self._protection_boost_amps,
+                        base_charge + sunset_boost + self._protection_boost_amps,
                         bms_limit=data.bms_charge_current_limit,
                     )
                     
