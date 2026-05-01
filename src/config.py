@@ -312,6 +312,15 @@ class SunsetChargingConfig:
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("SUNSET_CHARGING_ENABLED", "true").lower() == "true")
     weather_enabled: bool = field(default_factory=lambda: os.getenv("SUNSET_WEATHER_ENABLED", "true").lower() == "true")
     weather_refresh_hours: float = field(default_factory=lambda: float(os.getenv("SUNSET_WEATHER_REFRESH_HOURS", "3")))
+    # "Selling first": when total house load stays above selling_first_load_kw for
+    # selling_first_hold_minutes AND day solar quality is at least
+    # selling_first_quality_threshold, sunset charging temporarily pauses and hands
+    # control back to the base schedule + battery boost protection. This lets the
+    # PV cover the high load (heatpump / EV) without the inverter curtailing.
+    selling_first_enabled: bool = field(default_factory=lambda: os.getenv("SUNSET_SELLING_FIRST_ENABLED", "false").lower() == "true")
+    selling_first_load_kw: float = field(default_factory=lambda: float(os.getenv("SUNSET_SELLING_FIRST_LOAD_KW", "6.0")))
+    selling_first_hold_minutes: float = field(default_factory=lambda: float(os.getenv("SUNSET_SELLING_FIRST_HOLD_MIN", "5.0")))
+    selling_first_quality_threshold: float = field(default_factory=lambda: float(os.getenv("SUNSET_SELLING_FIRST_QUALITY", "0.80")))
 
 
 def load_default_schedules() -> list:

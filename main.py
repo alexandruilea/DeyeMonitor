@@ -127,6 +127,16 @@ class DeyeApp(ctk.CTk):
         self._sunset_boost_amps = 0  # Current sunset boost amount
         self._sunset_active = False  # Whether sunset charging is actively boosting
         self._last_sunset_adjustment = 0.0  # Timestamp of last sunset charge adjustment
+        # "Selling first" handover state — when a high load is sustained on a sunny
+        # day, sunset charging pauses so PV power covers the load instead of the
+        # battery (avoids inverter export curtailment).
+        self._selling_first_paused = False
+        self._load_high_since: float | None = None  # When load first crossed threshold continuously
+        self._load_low_since: float | None = None   # When load first dropped below continuously
+        # Force the next sunset write to bypass the inverter-settled gate. Set on
+        # resume from selling-first pause so the post-handover boost cannot get
+        # stuck behind transient battery-power vs expected-power mismatches.
+        self._sunset_force_write = False
 
         # Off-grid charge boost: when grid is disconnected, multiply the final
         # charge target (base + protection + sunset) by 1.5 right before the
@@ -371,13 +381,30 @@ class DeyeApp(ctk.CTk):
             self._current_max_discharge = max_discharge
             self._update_charge_display()
             
-            # Initialize protection boost from inverter state so we don't reset
-            # charging speed on app restart (e.g. inverter at 180A, base is 40A → boost = 140A)
+            # Initialize charge boost from inverter state so we don't reset
+            # charging speed on app restart (e.g. inverter at 250A, base is 20A → boost = 230A).
+            # Attribute the carry-over to sunset charging when it's enabled —
+            # otherwise protection will lock the inverter at the carried value
+            # (sunset sees base+protection ≥ required and stays Standby, while
+            # protection's voltage-hold latch can prevent recovery on grids
+            # that naturally sit near the warning threshold). Sunset's first
+            # evaluation will then ramp the boost to its computed target.
             base_charge = self._get_base_charge_amps()
             if max_charge > base_charge:
-                self._protection_boost_amps = max_charge - base_charge
-                self._protection_active = True
-                print(f"[INIT] Protection boost initialized: inverter={max_charge}A - base={base_charge}A = boost={self._protection_boost_amps}A")
+                carry_over = max_charge - base_charge
+                sunset_enabled_at_init = (
+                    hasattr(self, "sunset_panel") and self.sunset_panel.is_enabled()
+                )
+                if sunset_enabled_at_init:
+                    self._sunset_boost_amps = carry_over
+                    self._sunset_active = True
+                    self._last_sunset_adjustment = 0.0  # evaluate immediately
+                    self._sunset_force_write = True     # bypass settled gate on first write
+                    print(f"[INIT] Sunset boost initialized: inverter={max_charge}A - base={base_charge}A = boost={carry_over}A")
+                else:
+                    self._protection_boost_amps = carry_over
+                    self._protection_active = True
+                    print(f"[INIT] Protection boost initialized: inverter={max_charge}A - base={base_charge}A = boost={carry_over}A")
         else:
             print("[INIT] Could not read charge settings from inverter")
         
@@ -543,7 +570,27 @@ class DeyeApp(ctk.CTk):
         effective_target_max = self._apply_charge_caps(
             target_max + self._protection_boost_amps + self._sunset_boost_amps
         )
-        register_in_sync = (self._current_max_charge == effective_target_max and
+
+        # Startup gate: defer writing max_charge until sunset charging has had
+        # a chance to evaluate the weather forecast. Otherwise, restarting the
+        # app during a slot whose default max_charge differs from the
+        # sunset-driven target produces a brief window of "wrong" charge speed
+        # before sunset catches up. The gate is open when sunset is disabled,
+        # weather is disabled, the forecast has loaded, or the forecast has
+        # failed at least once (so we know it's never coming).
+        sunset_enabled = self.sunset_panel.is_enabled() if hasattr(self, 'sunset_panel') else False
+        if not sunset_enabled or not self._weather_enabled:
+            charge_gate_open = True
+        else:
+            charge_gate_open = (self._weather.is_available
+                                or self._weather._consecutive_failures > 0)
+
+        # While the gate is closed, treat max_charge as if it were already in
+        # sync so we don't re-enter the apply block every poll just for that
+        # register. Other mismatches (grid charge, discharge) still apply.
+        max_charge_in_sync = (self._current_max_charge == effective_target_max
+                              or not charge_gate_open)
+        register_in_sync = (max_charge_in_sync and
                             self._current_grid_charge == target_grid and
                             self._current_max_discharge == target_discharge)
         if self._last_applied_schedule == schedule_key and register_in_sync:
@@ -563,11 +610,14 @@ class DeyeApp(ctk.CTk):
         
         # Only write max charge if it changed — but respect active sunset/protection boosts
         # plus the off-grid 50% multiplier (applied last, before the inverter cap).
-        effective_target_max = self._apply_charge_caps(
-            target_max + self._protection_boost_amps + self._sunset_boost_amps
-        )
+        # When charge_gate_open is False, skip the write and let sunset charging
+        # set the first value once the forecast settles.
         if self._current_max_charge != effective_target_max:
-            if self.inverter.set_max_charge_current(effective_target_max):
+            if not charge_gate_open:
+                if not getattr(self, "_charge_gate_logged", False):
+                    print("[SCHEDULE] Deferring max_charge write until weather forecast settles")
+                    self._charge_gate_logged = True
+            elif self.inverter.set_max_charge_current(effective_target_max):
                 self._current_max_charge = effective_target_max
             else:
                 all_success = False
@@ -756,7 +806,93 @@ class DeyeApp(ctk.CTk):
         
         weather_str = self._weather.summary_str() if self._weather_enabled else ""
         sparkline = self._weather.day_sparkline() if self._weather_enabled else ""
-        
+
+        # ── "Selling First" handover ────────────────────────────────────
+        # On sunny days (forecast quality ≥ threshold), if a sustained high load
+        # is detected, hand over charging control to the base schedule + battery
+        # boost protection so PV directly feeds the load instead of routing
+        # through the battery (avoids inverter export curtailment).
+        from src.config import sunset_config as _sf_cfg
+        sf_enabled = self.sunset_panel.is_selling_first_enabled()
+        total_load_kw = sum(data.total_loads) / 1000.0
+        forecast_quality = None
+        if self._weather_enabled and self._weather.is_available:
+            forecast_quality = self._weather.get_day_solar_quality(now, deadline)
+
+        sf_quality_ok = (
+            forecast_quality is not None
+            and forecast_quality >= _sf_cfg.selling_first_quality_threshold
+        )
+        sf_threshold_kw = _sf_cfg.selling_first_load_kw
+        sf_hold_sec = _sf_cfg.selling_first_hold_minutes * 60.0
+
+        if sf_enabled and sf_quality_ok:
+            if total_load_kw >= sf_threshold_kw:
+                self._load_low_since = None
+                if self._load_high_since is None:
+                    self._load_high_since = current_time
+                if (not self._selling_first_paused
+                        and (current_time - self._load_high_since) >= sf_hold_sec):
+                    # Trigger pause: drop sunset boost, reset to base + protection
+                    base = self._get_base_charge_amps()
+                    target_charge = self._apply_charge_caps(
+                        base + self._protection_boost_amps
+                    )
+                    print(f"[SUNSET] Selling-first PAUSE: load {total_load_kw:.1f}kW "
+                          f"≥ {sf_threshold_kw:.1f}kW for "
+                          f"{_sf_cfg.selling_first_hold_minutes:.0f}min, "
+                          f"q={forecast_quality:.0%} → handover "
+                          f"(base={base}A, protection={self._protection_boost_amps}A, "
+                          f"target={target_charge}A)")
+                    if self.inverter.set_max_charge_current(target_charge):
+                        self._sunset_boost_amps = 0
+                        self._sunset_active = False
+                        self._current_max_charge = target_charge
+                        self._last_applied_schedule = None
+                        self._last_sunset_adjustment = current_time
+                        self._update_charge_display()
+                    self._selling_first_paused = True
+            else:
+                self._load_high_since = None
+                if self._load_low_since is None:
+                    self._load_low_since = current_time
+                if (self._selling_first_paused
+                        and (current_time - self._load_low_since) >= sf_hold_sec):
+                    self._selling_first_paused = False
+                    self._sunset_force_write = True
+                    self._last_sunset_adjustment = 0.0
+                    print(f"[SUNSET] Selling-first RESUME: load {total_load_kw:.1f}kW "
+                          f"< {sf_threshold_kw:.1f}kW for "
+                          f"{_sf_cfg.selling_first_hold_minutes:.0f}min "
+                          f"— forcing sunset re-evaluation")
+        else:
+            # Conditions inactive (toggle off, no forecast, or quality < threshold):
+            # clear hysteresis timers and auto-resume any active pause.
+            self._load_high_since = None
+            self._load_low_since = None
+            if self._selling_first_paused:
+                if not sf_enabled:
+                    reason = "toggle off"
+                elif forecast_quality is None:
+                    reason = "no forecast"
+                else:
+                    reason = (f"q={forecast_quality:.0%} "
+                              f"< {_sf_cfg.selling_first_quality_threshold:.0%}")
+                print(f"[SUNSET] Selling-first auto-resume ({reason}) — forcing sunset re-evaluation")
+                self._selling_first_paused = False
+                self._sunset_force_write = True
+                self._last_sunset_adjustment = 0.0
+
+        if self._selling_first_paused:
+            self.after(0, lambda hl=hours_left if hours_left > 0 else 0: (
+                self.sunset_panel.update_state(
+                    sunset_str, hl, 0, False,
+                    1.0, weather_str, sparkline,
+                    selling_first_paused=True)
+            ))
+            return
+        # ────────────────────────────────────────────────────────────────
+
         current_soc = data.soc
         target_soc = settings["target_soc"]
         capacity_ah = settings["battery_capacity_ah"]
@@ -941,8 +1077,13 @@ class DeyeApp(ctk.CTk):
                            (self._sunset_active and self._current_max_charge != expected_charge))
             
             if needs_write:
-                # Verify inverter has caught up before changing charge speed
-                if not self._is_charge_speed_settled(data, data.battery_voltage if data.battery_voltage > 0 else 52):
+                # Verify inverter has caught up before changing charge speed.
+                # Bypass the gate when _sunset_force_write is set (e.g. just
+                # resumed from selling-first pause) — the inverter has been
+                # idle during the pause so there's no ramp lag to wait for.
+                if (not self._sunset_force_write
+                        and not self._is_charge_speed_settled(
+                            data, data.battery_voltage if data.battery_voltage > 0 else 52)):
                     self.after(0, lambda: self.sunset_panel.update_state(
                         sunset_str, hours_left, required_amps, self._sunset_active,
                         self._cloud_boost_factor, weather_str, sparkline))
@@ -959,6 +1100,7 @@ class DeyeApp(ctk.CTk):
                       f" {src_info}, SOC {current_soc}%→{target_soc}%)")
                 
                 if self.inverter.set_max_charge_current(target_charge):
+                    self._sunset_force_write = False
                     # Only update boost state after confirmed write
                     self._sunset_boost_amps = sunset_boost
                     self._sunset_active = True
@@ -1096,22 +1238,34 @@ class DeyeApp(ctk.CTk):
         max_charge_limit = deye_config.max_charge_amps_limit
         
         if needs_boost:
-            # Verify inverter has caught up to current charge setting before increasing further
-            if not self._is_charge_speed_settled(data, battery_voltage):
+            # Include any active sunset boost so protection's write doesn't
+            # transiently clobber the sunset-driven charge target.
+            sunset_boost = self._sunset_boost_amps if self._sunset_active else 0
+
+            # Compute the upper bound for boost given current limits.
+            cap_from_inverter = max_charge_limit - base_charge - sunset_boost
+            cap_from_bms = (data.bms_charge_current_limit - base_charge - sunset_boost
+                            if data.bms_charge_current_limit > 0 else cap_from_inverter)
+            available_headroom = max(0, min(cap_from_inverter, cap_from_bms))
+
+            at_cap = available_headroom <= self._protection_boost_amps
+
+            # Verify inverter has caught up to current charge setting before
+            # increasing further. Skip this check when we're already at the cap:
+            # the boost value can't grow anyway, and the only purpose of staying
+            # in this branch is to re-assert the existing target on the
+            # inverter (which doesn't depend on settled state).
+            if not at_cap and not self._is_charge_speed_settled(data, battery_voltage):
                 self.after(0, lambda: self.protection_panel.update_protection_state(
                     self._protection_active, self._protection_boost_amps
                 ))
                 return
-            
-            # Include any active sunset boost so protection's write doesn't
-            # transiently clobber the sunset-driven charge target.
-            sunset_boost = self._sunset_boost_amps if self._sunset_active else 0
 
             # BMS charge limit check: if the BMS reports a charge current limit,
             # don't boost beyond what the BMS will accept
             if data.bms_charge_current_limit > 0:
                 target_after_boost = base_charge + sunset_boost + self._protection_boost_amps + charge_step
-                if target_after_boost > data.bms_charge_current_limit:
+                if target_after_boost > data.bms_charge_current_limit and not at_cap:
                     self.after(0, lambda: self.protection_panel.update_protection_state(
                         self._protection_active, self._protection_boost_amps, bms_limited=True
                     ))
@@ -1145,6 +1299,32 @@ class DeyeApp(ctk.CTk):
                     self._current_max_charge = target_charge
                     self._update_charge_display()
                     self._log_error(f"Protection: Boosting +{step}A ({step_type}) to {target_charge}A (export={export_power}W, voltage={max_voltage:.1f}V)")
+            else:
+                # Cap reached (typically because sunset has consumed all the
+                # headroom, or the BMS limit equals base+sunset). The boost
+                # value can't grow, but export is still over threshold —
+                # defensively re-write the target to the inverter so a
+                # silent register desync (we think it's at max but the
+                # inverter is actually charging slower) gets corrected.
+                target_charge = self._apply_charge_caps(
+                    base_charge + sunset_boost + self._protection_boost_amps,
+                    bms_limit=data.bms_charge_current_limit,
+                )
+                # Only flag protection "active" when it's actually boosting.
+                # When sunset (or BMS) has consumed all available headroom and
+                # protection's own boost is 0, sunset is doing the work — we
+                # still re-assert the target defensively but don't mislead the
+                # UI into showing "Protection ACTIVE (+0A boost)".
+                self._protection_active = self._protection_boost_amps > 0
+                self._last_protection_adjustment = current_time
+                print(f"[PROTECTION] At cap (base={base_charge}A + sunset={sunset_boost}A + boost={self._protection_boost_amps}A = {target_charge}A), "
+                      f"export={export_power}W/{max_sell}W — re-asserting target to inverter")
+                if self.inverter.set_max_charge_current(target_charge):
+                    self._current_max_charge = target_charge
+                    self._update_charge_display()
+                    self._log_error(
+                        f"Protection: At cap {target_charge}A, re-asserted "
+                        f"(export={export_power}W, voltage={max_voltage:.1f}V)")
                     
         elif can_recover and self._protection_boost_amps > 0:
             # If sunset charging is active and driving a higher rate anyway,

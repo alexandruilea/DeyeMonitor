@@ -1255,6 +1255,21 @@ class SunsetChargingPanel(ctk.CTkFrame):
         self.enable_switch.grid(row=0, column=1, padx=20)
         if sunset_config.enabled_at_startup:
             self.enable_switch.select()
+
+        # "Selling First" switch — when ON, sunset charging pauses while a
+        # sustained high load is present on a sunny day, letting PV power
+        # the load instead of the battery (avoids curtailment).
+        self.selling_first_var = ctk.BooleanVar(value=sunset_config.selling_first_enabled)
+        self.selling_first_switch = ctk.CTkSwitch(
+            header_frame, text="Selling First",
+            variable=self.selling_first_var,
+            font=("Roboto", 11, "bold"),
+            command=self._on_selling_first_toggle,
+            progress_color="#16A085",
+        )
+        self.selling_first_switch.grid(row=0, column=2, padx=10)
+        if sunset_config.selling_first_enabled:
+            self.selling_first_switch.select()
         
         # Status label
         _startup_enabled = sunset_config.enabled_at_startup
@@ -1263,7 +1278,7 @@ class SunsetChargingPanel(ctk.CTkFrame):
             font=("Roboto", 11),
             text_color="#2ECC71" if _startup_enabled else "gray"
         )
-        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        self.lbl_status.grid(row=0, column=3, sticky="e", padx=10)
         
         # Settings container
         settings_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
@@ -1398,9 +1413,17 @@ class SunsetChargingPanel(ctk.CTkFrame):
         )
         if self.on_settings_change:
             self.on_settings_change()
-    
+
+    def _on_selling_first_toggle(self) -> None:
+        """Handle 'Selling First' toggle. Logic side decides when to pause."""
+        if self.on_settings_change:
+            self.on_settings_change()
+
     def is_enabled(self) -> bool:
         return self.enabled_var.get()
+
+    def is_selling_first_enabled(self) -> bool:
+        return self.selling_first_var.get()
     
     def _parse_peak_solar_hour(self) -> float:
         """Parse peak solar hour field. Returns 0.0 for 'auto' or empty."""
@@ -1446,7 +1469,8 @@ class SunsetChargingPanel(ctk.CTkFrame):
             }
     
     def update_state(self, sunset_str: str, hours_left: float, required_amps: int, active: bool,
-                      cloud_boost: float = 1.0, weather_str: str = "", sparkline: str = "") -> None:
+                      cloud_boost: float = 1.0, weather_str: str = "", sparkline: str = "",
+                      selling_first_paused: bool = False) -> None:
         """Update the state display labels."""
         self.lbl_sunset_time.configure(text=f"Sunset: {sunset_str}")
         
@@ -1460,7 +1484,11 @@ class SunsetChargingPanel(ctk.CTkFrame):
         else:
             self.lbl_time_remaining.configure(text="After sunset", text_color="#E74C3C")
         
-        if active:
+        if selling_first_paused:
+            self.lbl_required_amps.configure(
+                text="Paused (Selling First)", text_color="#16A085"
+            )
+        elif active:
             color = "#E74C3C" if required_amps > 100 else "#F39C12" if required_amps > 50 else "#2ECC71"
             cloud_str = f" \u2601{cloud_boost:.1f}x" if cloud_boost > 1.05 else ""
             self.lbl_required_amps.configure(text=f"Required: {required_amps}A{cloud_str}", text_color=color)
