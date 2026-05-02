@@ -134,12 +134,12 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 
 #### Inverter Connection
 
-| Variable             | Description                 |
-| -------------------- | --------------------------- |
-| `DEYE_IP`            | Deye inverter IP address    |
-| `DEYE_LOGGER_SERIAL` | Deye logger serial number   |
-| `DEYE_PORT`          | Modbus port (default: 8899) |
-| `DEYE_MODEL`         | Inverter model name         |
+| Variable                | Description                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| `DEYE_IP`               | Deye inverter IP address                                                                     |
+| `DEYE_LOGGER_SERIAL`    | Deye logger serial number                                                                    |
+| `DEYE_PORT`             | Modbus port (default: 8899)                                                                  |
+| `DEYE_MODEL`            | Inverter model name                                                                          |
 | `DEYE_ZERO_EXPORT_MODE` | Zero export mode: 1 = Zero Export to Load (internal CT), 2 = Zero Export to CT (external CT) |
 
 #### Inverter Power Limits (Model-Specific)
@@ -195,25 +195,25 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 
 #### Sunset Charging Settings
 
-| Variable                       | Description                                                           | Default |
-| ------------------------------ | --------------------------------------------------------------------- | ------- |
-| `SOLAR_LATITUDE`               | Your location latitude                                                | 47.00   |
-| `SOLAR_LONGITUDE`              | Your location longitude                                               | 22.00   |
-| `BATTERY_CAPACITY_AH`          | Total battery capacity in Amp-hours                                   | 600     |
-| `SUNSET_TARGET_SOC`            | Target SOC to reach by sunset (%)                                     | 100     |
-| `SUNSET_BUFFER_MINUTES`        | Finish charging this many minutes before sunset                       | 60      |
-| `SUNSET_MIN_CHARGE_AMPS`       | Minimum charge rate when sunset charging is active                    | 10      |
-| `SUNSET_PEAK_SOLAR_HOUR`       | Peak solar production hour in local time (e.g. 13.5); 0 = auto (noon) | 0       |
-| `SUNSET_PEAK_EXPECTED_KW`      | Peak clear-sky PV output in kW (e.g. 14); 0 = no cloudy compensation  | 0       |
-| `SUNSET_CLOUD_THRESHOLD_PCT`   | Below this % of expected PV → apply cloudy boost                      | 60      |
-| `SUNSET_CLOUD_MAX_BOOST`       | Maximum cloudy-day boost multiplier                                   | 3.0     |
-| `SUNSET_CHARGING_ENABLED`      | Enable sunset-aware charging at startup (true/false)                  | true    |
-| `SUNSET_WEATHER_ENABLED`       | Use Open-Meteo forecast for predictive charging (true/false)          | true    |
-| `SUNSET_WEATHER_REFRESH_HOURS` | How often to refresh the weather forecast (hours)                     | 3       |
-| `SUNSET_SELLING_FIRST_ENABLED` | Enable selling-first handover (pause sunset on sunny high-load days)  | false   |
-| `SUNSET_SELLING_FIRST_LOAD_KW` | House load threshold that triggers pause (kW)                         | 6.0     |
-| `SUNSET_SELLING_FIRST_HOLD_MIN`| Minutes load must stay above/below threshold before switching         | 5.0     |
-| `SUNSET_SELLING_FIRST_QUALITY` | Minimum forecast solar quality to allow pause (0.0–1.0)               | 0.80    |
+| Variable                        | Description                                                           | Default |
+| ------------------------------- | --------------------------------------------------------------------- | ------- |
+| `SOLAR_LATITUDE`                | Your location latitude                                                | 47.00   |
+| `SOLAR_LONGITUDE`               | Your location longitude                                               | 22.00   |
+| `BATTERY_CAPACITY_AH`           | Total battery capacity in Amp-hours                                   | 600     |
+| `SUNSET_TARGET_SOC`             | Target SOC to reach by sunset (%)                                     | 100     |
+| `SUNSET_BUFFER_MINUTES`         | Finish charging this many minutes before sunset                       | 60      |
+| `SUNSET_MIN_CHARGE_AMPS`        | Minimum charge rate when sunset charging is active                    | 10      |
+| `SUNSET_PEAK_SOLAR_HOUR`        | Peak solar production hour in local time (e.g. 13.5); 0 = auto (noon) | 0       |
+| `SUNSET_PEAK_EXPECTED_KW`       | Peak clear-sky PV output in kW (e.g. 14); 0 = no cloudy compensation  | 0       |
+| `SUNSET_CLOUD_THRESHOLD_PCT`    | Below this % of expected PV → apply cloudy boost                      | 60      |
+| `SUNSET_CLOUD_MAX_BOOST`        | Maximum cloudy-day boost multiplier                                   | 3.0     |
+| `SUNSET_CHARGING_ENABLED`       | Enable sunset-aware charging at startup (true/false)                  | true    |
+| `SUNSET_WEATHER_ENABLED`        | Use Open-Meteo forecast for predictive charging (true/false)          | true    |
+| `SUNSET_WEATHER_REFRESH_HOURS`  | How often to refresh the weather forecast (hours)                     | 3       |
+| `SUNSET_SELLING_FIRST_ENABLED`  | Enable selling-first handover (pause sunset on sunny high-load days)  | false   |
+| `SUNSET_SELLING_FIRST_LOAD_KW`  | House load threshold that triggers pause (kW)                         | 6.0     |
+| `SUNSET_SELLING_FIRST_HOLD_MIN` | Minutes load must stay above/below threshold before switching         | 5.0     |
+| `SUNSET_SELLING_FIRST_QUALITY`  | Minimum forecast solar quality to allow pause (0.0–1.0)               | 0.80    |
 
 #### Tapo Smart Plug Outlets
 
