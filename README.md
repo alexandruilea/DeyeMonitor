@@ -2,7 +2,7 @@
 
 A professional Energy Management System for Deye inverters with Tapo smart plug and Tuya socket thermostat integration for heat pump and consumer load control.
 
-<!-- README last updated at commit: abc73e3 (2026-03-26) -->
+<!-- README last updated at commit: 4ef752b (2026-05-01) -->
 
 ## Features
 
@@ -18,7 +18,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Phase voltage exceeds warning threshold
   - Proportional response: large deviations get proportional amp jumps, small ones use fine-tuning steps
   - Voltage hold margin prevents premature recovery while voltage is still elevated
-  - Persists boost level across app restarts (reads current inverter state on startup)
+  - **At-cap re-assert** — when sunset/BMS has consumed all available headroom, the protection logic still defensively re-writes the target each interval to correct any silent inverter desync (panel correctly reports Standby when its own boost is 0)
   - Register write throttling to reduce inverter flash/EEPROM wear
   - Verifies inverter has caught up to current charge setting before adjusting further
 - 🌅 **Sunset-Aware Charging** - Dynamically adjusts charge rate throughout the day to reach target SOC by sunset:
@@ -31,6 +31,14 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Configurable target SOC, buffer time, and battery capacity
   - 10A step rounding and throttled writes to avoid excessive register writes
   - Automatically coordinates with battery boost protection (protection yields when sunset charging is active)
+  - **Restart persistence** — on app start, the inverter's current max-charge value is preserved as a sunset boost (when sunset is enabled) so charging speed doesn't reset; falls back to protection-boost attribution when sunset is off
+  - **Startup gate** — defers writing the schedule's default max_charge to the inverter until the weather forecast has either loaded or definitively failed, preventing a brief window of "wrong" charge speed at restart
+- 🤝 **Selling-First Handover** (sunset module) - On sunny days, when sustained high household load is detected, sunset charging hands control over to the base schedule + boost protection so PV power directly feeds the load instead of routing through the battery (avoids inverter export curtailment when total load + battery charge exceeds inverter sell capacity):
+  - Configurable load threshold (kW) and hold time (minutes) with hysteresis on both pause and resume transitions
+  - Only activates when forecast solar quality ≥ a configurable threshold (no sense pausing on cloudy days)
+  - Auto-resumes when load drops back below threshold for the hold duration, when toggled off, or when conditions change
+- 🔌 **Off-Grid Charge Boost** - When the grid is disconnected, multiplies the final charge target (base + protection + sunset) by 1.5× before applying the inverter/BMS caps, to absorb more PV into the battery while running off-grid. Cleared automatically when the grid recovers.
+- 🚧 **Anti-Export Leak Protection** - Forces zero-export work mode if the inverter ignores the charge setting and leaks power to grid despite a high charge target, with 5-minute debounce on both directions to avoid mode-flapping. Restores the original work mode when the leak condition clears.
 - 🔥 **Heat Pump – Socket Thermostat (Tuya)** - Intelligent heat pump control via a Tuya socket thermostat (e.g. "Priză termostat PDC"):
   - _Control_: Sets target temperature and hysteresis on the device; the thermostat firmware handles relay switching instantly (no relay toggling from the app)
   - _Scheduling_: Time-based intervals with min/max temperature ranges; device turns ON below min, OFF at max
@@ -132,6 +140,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 | `DEYE_LOGGER_SERIAL` | Deye logger serial number   |
 | `DEYE_PORT`          | Modbus port (default: 8899) |
 | `DEYE_MODEL`         | Inverter model name         |
+| `DEYE_ZERO_EXPORT_MODE` | Zero export mode: 1 = Zero Export to Load (internal CT), 2 = Zero Export to CT (external CT) |
 
 #### Inverter Power Limits (Model-Specific)
 
@@ -201,6 +210,10 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 | `SUNSET_CHARGING_ENABLED`      | Enable sunset-aware charging at startup (true/false)                  | true    |
 | `SUNSET_WEATHER_ENABLED`       | Use Open-Meteo forecast for predictive charging (true/false)          | true    |
 | `SUNSET_WEATHER_REFRESH_HOURS` | How often to refresh the weather forecast (hours)                     | 3       |
+| `SUNSET_SELLING_FIRST_ENABLED` | Enable selling-first handover (pause sunset on sunny high-load days)  | false   |
+| `SUNSET_SELLING_FIRST_LOAD_KW` | House load threshold that triggers pause (kW)                         | 6.0     |
+| `SUNSET_SELLING_FIRST_HOLD_MIN`| Minutes load must stay above/below threshold before switching         | 5.0     |
+| `SUNSET_SELLING_FIRST_QUALITY` | Minimum forecast solar quality to allow pause (0.0–1.0)               | 0.80    |
 
 #### Tapo Smart Plug Outlets
 
