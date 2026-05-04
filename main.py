@@ -541,6 +541,21 @@ class DeyeApp(ctk.CTk):
             target_discharge = active_schedule["max_discharge_amps"]
             target_sell = active_schedule.get("sell", False)
             target_sell_power = active_schedule.get("sell_power", 0)
+            min_batt_pct = active_schedule.get("min_batt_pct", 0)
+
+            # Suppress sell when battery SOC is below the slot's minimum
+            current_soc = data.soc if data is not None else 100
+            sell_soc_suppressed = target_sell and min_batt_pct > 0 and current_soc < min_batt_pct
+            if sell_soc_suppressed:
+                if not getattr(self, "_sell_soc_suppressed", False):
+                    self._sell_soc_suppressed = True
+                    print(f"[SCHEDULE] Battery sell suppressed: SOC {current_soc}% < min {min_batt_pct}%")
+                target_sell = False
+            else:
+                if getattr(self, "_sell_soc_suppressed", False):
+                    self._sell_soc_suppressed = False
+                    print(f"[SCHEDULE] Battery sell restored: SOC {current_soc}% >= min {min_batt_pct}%")
+
             schedule_key = (
                 active_schedule["start_hour"],
                 active_schedule["start_min"],

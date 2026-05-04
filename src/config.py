@@ -326,8 +326,8 @@ class SunsetChargingConfig:
 def load_default_schedules() -> list:
     """Load default schedule rows from environment variables.
     
-    Format: SCHEDULE_N=HH:MM-HH:MM,max_charge,grid_charge,max_discharge,sell|nosell,sell_power
-    Example: SCHEDULE_1=23:00-06:00,40,40,185,sell,500
+    Format: SCHEDULE_N=HH:MM-HH:MM,max_charge,grid_charge,max_discharge,sell|nosell,min_batt_pct,sell_power
+    Example: SCHEDULE_1=23:00-06:00,40,40,185,sell,20,500
     """
     schedules = []
     i = 1
@@ -337,7 +337,12 @@ def load_default_schedules() -> list:
             break
         try:
             parts = raw.split(",")
-            time_range, max_charge, grid_charge, max_discharge, sell_mode, sell_power = parts
+            if len(parts) == 6:
+                # Legacy format without min_batt_pct
+                time_range, max_charge, grid_charge, max_discharge, sell_mode, sell_power = parts
+                min_batt_pct = "20"
+            else:
+                time_range, max_charge, grid_charge, max_discharge, sell_mode, min_batt_pct, sell_power = parts[:7]
             start_str, end_str = time_range.split("-")
             sh, sm = start_str.split(":")
             eh, em = end_str.split(":")
@@ -348,6 +353,7 @@ def load_default_schedules() -> list:
                 "grid_charge_amps": int(grid_charge),
                 "max_discharge_amps": int(max_discharge),
                 "sell": sell_mode.strip().lower() == "sell",
+                "min_batt_pct": int(min_batt_pct),
                 "sell_power": int(sell_power),
             })
         except (ValueError, IndexError):

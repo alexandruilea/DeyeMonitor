@@ -604,17 +604,26 @@ class TimeScheduleRow(ctk.CTkFrame):
         )
         self.sw_sell.grid(row=0, column=18, padx=(15, 5))
         
+        # Min battery % (floor for battery sell — battery won't discharge below this SOC)
+        ctk.CTkLabel(self, text="Min batt %:", font=("Roboto", 10), text_color="#E74C3C").grid(row=0, column=19, padx=(5, 2))
+        self.min_batt_pct = ctk.CTkEntry(self, width=40, justify="center")
+        self.min_batt_pct.grid(row=0, column=20, padx=2)
+        self.min_batt_pct.insert(0, "20")
+        self.min_batt_pct.bind("<Key>", lambda e: self._mark_dirty())
+        self.min_batt_pct.bind("<FocusOut>", lambda e: self._on_field_change())
+        ctk.CTkLabel(self, text="%", font=("Roboto", 10)).grid(row=0, column=21, padx=(0, 10))
+        
         # Max Sell Power (W)
-        ctk.CTkLabel(self, text="Sell Power:", font=("Roboto", 10), text_color="#E74C3C").grid(row=0, column=19, padx=(5, 2))
+        ctk.CTkLabel(self, text="Sell Power:", font=("Roboto", 10), text_color="#E74C3C").grid(row=0, column=22, padx=(5, 2))
         self.sell_power = ctk.CTkEntry(self, width=70, justify="center")
-        self.sell_power.grid(row=0, column=20, padx=2)
+        self.sell_power.grid(row=0, column=23, padx=2)
         self.sell_power.insert(0, "0")
         self.sell_power.bind("<Key>", lambda e: self._mark_dirty())
         self.sell_power.bind("<FocusOut>", lambda e: self._on_field_change())
-        ctk.CTkLabel(self, text="W", font=("Roboto", 10)).grid(row=0, column=21, padx=(0, 5))
+        ctk.CTkLabel(self, text="W", font=("Roboto", 10)).grid(row=0, column=24, padx=(0, 5))
         
         # Add a spacer column to push delete button to the right
-        self.grid_columnconfigure(22, weight=1)
+        self.grid_columnconfigure(25, weight=1)
         
         # Delete button
         self.btn_delete = ctk.CTkButton(
@@ -622,7 +631,7 @@ class TimeScheduleRow(ctk.CTkFrame):
             fg_color="#E74C3C", hover_color="#C0392B",
             command=lambda: self.on_delete(self.index)
         )
-        self.btn_delete.grid(row=0, column=23, padx=(5, 10))
+        self.btn_delete.grid(row=0, column=26, padx=(5, 10))
     
     def _mark_dirty(self) -> None:
         """Mark this row as having been edited."""
@@ -648,6 +657,7 @@ class TimeScheduleRow(ctk.CTkFrame):
                 "max_discharge_amps": int(self.max_discharge.get()),
                 "sell": self.sell_var.get(),
                 "sell_power": int(self.sell_power.get()),
+                "min_batt_pct": int(self.min_batt_pct.get()),
             }
         except ValueError:
             return None
@@ -681,6 +691,9 @@ class TimeScheduleRow(ctk.CTkFrame):
         
         self.sell_power.delete(0, "end")
         self.sell_power.insert(0, str(data.get("sell_power", 0)))
+
+        self.min_batt_pct.delete(0, "end")
+        self.min_batt_pct.insert(0, str(data.get("min_batt_pct", 20)))
 
 
 class TimeSchedulePanel(ctk.CTkFrame):
@@ -900,9 +913,10 @@ class TimeSchedulePanel(ctk.CTkFrame):
                 "max_discharge_amps": int(self.default_max_discharge.get()),
                 "sell": False,
                 "sell_power": 0,
+                "min_batt_pct": 20,
             }
         except ValueError:
-            return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150, "sell": False, "sell_power": 0}
+            return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150, "sell": False, "sell_power": 0, "min_batt_pct": 20}
     
     def update_status(self, active_schedule: dict = None) -> None:
         """Update the status label to show current state."""
