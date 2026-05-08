@@ -677,8 +677,10 @@ class DeyeApp(ctk.CTk):
             self.after(0, lambda: self.protection_panel.set_enabled(True))
             print("[SCHEDULE] Boost protection restored (sell mode ended)")
         
-        # Set max sell power when in selling mode
-        if target_sell and self._current_sell_power != target_sell_power:
+        # Set max sell power for every slot — applies regardless of sell flag so
+        # transitioning out of a sell slot (e.g. 1500W night → 16000W morning)
+        # always writes the new value even when sell=False.
+        if self._current_sell_power != target_sell_power:
             if self.inverter.set_max_sell_power(target_sell_power):
                 self._current_sell_power = target_sell_power
                 # Also update the boost protection panel to match
