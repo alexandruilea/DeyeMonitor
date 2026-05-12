@@ -608,11 +608,16 @@ class DeyeApp(ctk.CTk):
         register_in_sync = (max_charge_in_sync and
                             self._current_grid_charge == target_grid and
                             self._current_max_discharge == target_discharge)
-        if self._last_applied_schedule == schedule_key and register_in_sync:
-            return
-        
+
         # Determine work mode: 0 = Selling First, 1/2 = Zero Export (from config)
         target_work_mode = 0 if target_sell else deye_config.zero_export_mode
+
+        # Also check work mode — external code (e.g. export leak restore) can change it
+        # without invalidating the schedule cache, so include it in the drift check.
+        work_mode_in_sync = (self._current_work_mode is None or
+                             self._current_work_mode == target_work_mode)
+        if self._last_applied_schedule == schedule_key and register_in_sync and work_mode_in_sync:
+            return
         
         # Apply the settings - only write values that actually changed
         sell_str = f", Sell={target_sell_power}W" if target_sell else ""
@@ -1495,16 +1500,21 @@ class DeyeApp(ctk.CTk):
                 remaining = int(self._export_leak_debounce_sec - elapsed)
                 self._update_sell_label(False, remaining, switching_to_off=False)
                 return
-            # Debounce elapsed — restore previous work mode and re-enable solar sell
+            # Debounce elapsed — re-enable solar sell and let the schedule re-apply
+            # the current slot's work mode on the next cycle.
+            # NOTE: Do NOT restore _export_leak_original_mode as work mode. If the
+            # time slot changed while the force was active (e.g. a sell slot at
+            # 05:00-06:00 transitioned to a no-sell slot at 06:00-11:00), restoring
+            # the old mode would overwrite the new slot's Zero Export setting and leave
+            # the inverter stuck in Selling First until the user intervenes.
             self._export_leak_clear_since = None
-            restore_mode = self._export_leak_original_mode
-            if restore_mode is not None and self._current_work_mode != restore_mode:
-                if self.inverter.set_work_mode(restore_mode):
-                    self._current_work_mode = restore_mode
-            self.inverter.set_solar_sell(True)
-            self._log_error(f"Export leak cleared: restored work mode + sell ON")
             self._export_leak_forced_zero_export = False
             self._export_leak_original_mode = None
+            self.inverter.set_solar_sell(True)
+            # Force the schedule to re-apply on the next poll so it corrects work
+            # mode and sell power for whichever slot is now active.
+            self._last_applied_schedule = None
+            self._log_error(f"Export leak cleared: sell ON restored (work mode follows schedule)")
             self._update_sell_label(True)
 
         elif should_force and self._export_leak_forced_zero_export:
