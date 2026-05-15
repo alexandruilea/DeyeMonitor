@@ -59,6 +59,7 @@ class TuyaChargerManager:
         self._cloud_retry_count: int = 0
         self._max_cloud_retries: int = 5
         self._cloud_error_logged: bool = False
+        self._cloud_permanent_failure: bool = False  # True when cloud is unrecoverable (e.g. subscription expired)
         if config.cloud_api_key and config.cloud_api_secret:
             try:
                 self._cloud = tinytuya.Cloud(
@@ -123,10 +124,25 @@ class TuyaChargerManager:
                         self._cloud_error_logged = False
                     except Exception as e:
                         self._cloud_retry_count += 1
+                        error_str = str(e)
                         if not self._cloud_error_logged:
                             if self.error_callback:
-                                self.error_callback(f"[EV Charger] Cloud error: {str(e)[:100]}")
+                                self.error_callback(f"[EV Charger] Cloud error: {error_str[:100]}")
                             self._cloud_error_logged = True
+                        # Detect permanent cloud failures — stop retrying immediately
+                        lower_err = error_str.lower()
+                        if "no permissions" in lower_err or "subscription" in lower_err or "permission" in lower_err:
+                            self._cloud_permanent_failure = True
+                            self._cloud = None  # Prevent future cloud attempts
+                            self._use_cloud = False
+                            self.state.is_cloud = False
+                            self._permanent_failure = False
+                            self._retry_count = 0
+                            self._last_error_logged = False
+                            self._device = None
+                            if self.error_callback:
+                                self.error_callback("[EV Charger] Cloud disabled (subscription expired) - local only")
+                            continue
                         if self._cloud_retry_count >= self._max_cloud_retries:
                             # Cloud also failing — fall back to local retry
                             self._use_cloud = False
