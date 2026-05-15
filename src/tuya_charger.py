@@ -216,7 +216,7 @@ class TuyaChargerManager:
             except Exception as e:
                 self._handle_error(e)
 
-            time.sleep(2)
+            time.sleep(15)  # EV charger doesn't need 2s resolution; longer gaps reduce WiFi module stress
 
     def _connect(self) -> None:
         """Create a tinytuya device connection."""
@@ -227,7 +227,7 @@ class TuyaChargerManager:
                 local_key=self.config.local_key,
                 version=self.config.protocol_version,
             )
-            dev.set_socketPersistent(True)
+            dev.set_socketPersistent(False)  # Non-persistent: fresh TCP connection per poll
             dev.set_socketTimeout(5)
             # Quick status check to verify connection
             status = dev.status()
