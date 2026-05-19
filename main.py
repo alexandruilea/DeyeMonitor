@@ -583,8 +583,10 @@ class DeyeApp(ctk.CTk):
         
         # Only apply if settings changed — but also re-apply if the register
         # is out of sync (e.g. a previous write failed)
+        bms_limit = data.bms_charge_current_limit if data is not None else 0
         effective_target_max = self._apply_charge_caps(
-            target_max + self._protection_boost_amps + self._sunset_boost_amps
+            target_max + self._protection_boost_amps + self._sunset_boost_amps,
+            bms_limit=bms_limit,
         )
 
         # Startup gate: defer writing max_charge until sunset charging has had
