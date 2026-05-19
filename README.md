@@ -141,6 +141,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 | `DEYE_PORT`             | Modbus port (default: 8899)                                                                  |
 | `DEYE_MODEL`            | Inverter model name                                                                          |
 | `DEYE_ZERO_EXPORT_MODE` | Zero export mode: 1 = Zero Export to Load (internal CT), 2 = Zero Export to CT (external CT) |
+| `EXPORT_LEAK_PROTECTION_ENABLED` | Enable anti-export leak protection (default `true`). Set to `false` to test the inverter's native production→loads→sell→charge behavior without intervention. |
 
 #### Inverter Power Limits (Model-Specific)
 

@@ -1420,7 +1420,24 @@ class DeyeApp(ctk.CTk):
         Restores previous mode when the condition clears (battery charging
         properly or SOC >= 80%). Charge speed is NOT restored — the
         schedule/sunset logic will recalculate it on the next cycle.
+
+        Can be disabled via EXPORT_LEAK_PROTECTION_ENABLED=false in .env to
+        test the inverter's native production→loads→sell→charge behavior.
         """
+        if not deye_config.export_leak_protection_enabled:
+            # Feature disabled — release any forced state and let the schedule
+            # re-apply on the next cycle.
+            if self._export_leak_forced_zero_export:
+                self.inverter.set_solar_sell(True)
+                self._export_leak_forced_zero_export = False
+                self._export_leak_original_mode = None
+                self._last_applied_schedule = None
+                self._log_error("Export leak protection disabled via .env — released forced state, sell ON restored")
+            self._export_leak_condition_since = None
+            self._export_leak_clear_since = None
+            self._update_sell_label(True)
+            return
+
         soc_threshold = 80
         charge_utilization_pct = 20  # actual vs expected
         min_export_w = 500  # ignore trivial export

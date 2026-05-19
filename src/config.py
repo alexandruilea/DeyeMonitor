@@ -50,6 +50,7 @@ class DeyeConfig:
     default_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_DISCHARGE_AMPS", "150")))
     zero_export_mode: int = field(default_factory=lambda: int(os.getenv("DEYE_ZERO_EXPORT_MODE", "2")))  # 1=Zero Export to Load (internal CT), 2=Zero Export to CT (external CT)
     min_register_write_interval: int = field(default_factory=lambda: int(os.getenv("DEYE_MIN_REGISTER_WRITE_INTERVAL", "30")))  # Minimum seconds between writes to the same register (reduces flash wear)
+    export_leak_protection_enabled: bool = field(default_factory=lambda: os.getenv("EXPORT_LEAK_PROTECTION_ENABLED", "true").lower() == "true")  # Force zero-export + sell OFF + max charge when inverter leaks PV to grid instead of charging the battery. Set to false to test the inverter's native production→loads→sell→charge behavior.
 
 
 @dataclass
