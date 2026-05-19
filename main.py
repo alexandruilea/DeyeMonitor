@@ -133,6 +133,7 @@ class DeyeApp(ctk.CTk):
         self._selling_first_paused = False
         self._load_high_since: float | None = None  # When load first crossed threshold continuously
         self._load_low_since: float | None = None   # When load first dropped below continuously
+        self._prev_ev_total_load_w: int = 0  # Previous total load for EV car-connect spike detection
         # Force the next sunset write to bypass the inverter-settled gate. Set on
         # resume from selling-first pause so the post-handover boost cannot get
         # stuck behind transient battery-power vs expected-power mismatches.
@@ -426,7 +427,7 @@ class DeyeApp(ctk.CTk):
     
     def _log_error(self, message: str) -> None:
         """Log error message to UI and log file (called from background thread)."""
-        print(f"[LOG] {message}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         try:
             if self._main_loop_started:
                 self.after(0, lambda: self.log_viewer.add_log(message))
@@ -1577,6 +1578,16 @@ class DeyeApp(ctk.CTk):
 
         result, detail = self.ev_logic.process(data, settings)
         charger_state = self.ev_charger.get_state()
+
+        # Load-spike hint: if total consumption jumps >5 kW while charger is idle,
+        # a car may have just plugged in — wake the charger poll immediately (once)
+        # rather than waiting up to 5 min for the next scheduled poll.
+        total_load_w = sum(data.total_loads)
+        if (total_load_w - self._prev_ev_total_load_w > 3000
+                and not charger_state.is_on
+                and not charger_state.is_charging):
+            self.ev_charger.hint_load_spike()
+        self._prev_ev_total_load_w = total_load_w
 
         # Log only on state changes to avoid spam
         # For solar charging, ignore wattage fluctuations — dedup on amps only

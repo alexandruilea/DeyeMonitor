@@ -52,6 +52,10 @@ class TuyaChargerManager:
         self._last_error_logged = False
         self._known_dps: dict = {}  # Merged DPS state across partial reads
         self._write_grace_until: float = 0.0  # Don't overwrite amps from poll until this time
+        self._json_error_streak: int = 0    # Consecutive protocol-mismatch errors — triggers version probe
+        self._working_version: Optional[float] = None  # Protocol version confirmed to work
+        self._hint_cooldown_until: float = 0.0  # Rate-limit load-spike hints (max once per 2 min)
+        self._was_disconnected: bool = False  # Set True on any failure; cleared on successful connect (logs Reconnected)
 
         # Cloud fallback
         self._cloud: Optional[tinytuya.Cloud] = None
@@ -76,6 +80,7 @@ class TuyaChargerManager:
 
         # Start background polling thread
         self._running = True
+        self._command_event = threading.Event()  # Wakes the loop immediately when a command is queued
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
@@ -88,24 +93,40 @@ class TuyaChargerManager:
         amps = max(self.config.min_amps, min(amps, self.config.max_amps))
         with self._lock:
             self._pending_amps = amps
+        self._command_event.set()
 
     def turn_on(self) -> None:
         """Request charger to start charging."""
         with self._lock:
             self._pending_on_off = True
+        self._command_event.set()
 
     def turn_off(self) -> None:
         """Request charger to stop charging."""
         with self._lock:
             self._pending_on_off = False
+        self._command_event.set()
 
     def get_state(self) -> ChargerState:
         """Return a snapshot of the current charger state."""
         return self.state
 
+    def hint_load_spike(self) -> None:
+        """Wake up the poll loop early when a large load spike suggests a car just connected.
+
+        Rate-limited to once per 2 minutes so a sustained high load doesn\'t
+        continuously hammer the device.
+        """
+        now = time.time()
+        if now < self._hint_cooldown_until:
+            return
+        self._hint_cooldown_until = now + 120
+        self._command_event.set()
+
     def stop(self) -> None:
         """Stop the background thread."""
         self._running = False
+        self._command_event.set()  # Wake up the loop so it can exit promptly
 
     # ------------------------------------------------------------------
     # Background loop
@@ -216,39 +237,73 @@ class TuyaChargerManager:
             except Exception as e:
                 self._handle_error(e)
 
-            time.sleep(15)  # EV charger doesn't need 2s resolution; longer gaps reduce WiFi module stress
+            # Adaptive poll interval: idle device gets long rests to reduce WiFi module stress.
+            # Commands always wake up immediately via _command_event.
+            if self.state.is_charging:
+                interval = 30    # Actively charging — monitor closely
+            elif self.state.is_on:
+                interval = 60    # On but car not drawing (e.g. waiting for car)
+            else:
+                interval = 300   # Fully idle — 5 min; WiFi module barely touched
+            self._command_event.wait(interval)
+            self._command_event.clear()
 
     def _connect(self) -> None:
-        """Create a tinytuya device connection."""
-        try:
-            dev = tinytuya.OutletDevice(
-                dev_id=self.config.device_id,
-                address=self.config.ip,
-                local_key=self.config.local_key,
-                version=self.config.protocol_version,
-            )
-            dev.set_socketPersistent(False)  # Non-persistent: fresh TCP connection per poll
-            dev.set_socketTimeout(5)
-            # Quick status check to verify connection
-            status = dev.status()
-            if "Error" in status:
-                raise ConnectionError(status["Error"])
-            self._device = dev
-            self.state.is_connected = True
-            self.state.is_cloud = False
-            self._use_cloud = False
-            self._permanent_failure = False
-            if self.error_callback and (self._retry_count > 0 or self._use_cloud):
-                self.error_callback("[EV Charger] Reconnected (local)")
-        except Exception as e:
-            self._device = None
-            self.state.is_connected = False
-            self._retry_count += 1
-            if not self._last_error_logged:
-                msg = str(e)[:100]
-                if self.error_callback:
-                    self.error_callback(f"[EV Charger] Connection failed: {msg}")
-                self._last_error_logged = True
+        """Create a tinytuya device connection, auto-probing protocol version on JSON errors."""
+        configured = self.config.protocol_version
+        # After repeated "Invalid JSON" errors the configured version is likely wrong.
+        # Try v3.4 and v3.5 as alternatives (Feyree devices ship with varying firmware).
+        if self._json_error_streak >= 2:
+            alts = [v for v in (3.4, 3.5, 3.3) if v != configured]
+            versions_to_try = [configured] + alts
+        else:
+            versions_to_try = [self._working_version or configured]
+
+        last_err: Optional[Exception] = None
+        for version in versions_to_try:
+            try:
+                dev = tinytuya.OutletDevice(
+                    dev_id=self.config.device_id,
+                    address=self.config.ip,
+                    local_key=self.config.local_key,
+                    version=version,
+                )
+                dev.set_socketPersistent(False)  # Non-persistent: fresh TCP per poll
+                dev.set_socketTimeout(5)
+                status = dev.status()
+                if "Error" in status:
+                    raise ConnectionError(status["Error"])
+                self._device = dev
+                self._working_version = version
+                self.state.is_connected = True
+                self.state.is_cloud = False
+                self._use_cloud = False
+                self._permanent_failure = False
+                self._json_error_streak = 0
+                if version != configured:
+                    if self.error_callback:
+                        self.error_callback(
+                            f"[EV Charger] Connected on v{version} "
+                            f"(configured v{configured}) — set EV_CHARGER_PROTOCOL_VERSION={version}"
+                        )
+                elif self.error_callback and self._was_disconnected:
+                    self.error_callback("[EV Charger] Reconnected (local)")
+                self._was_disconnected = False
+                return
+            except Exception as e:
+                last_err = e
+                continue
+
+        # All versions failed
+        self._device = None
+        self.state.is_connected = False
+        self._was_disconnected = True
+        self._retry_count += 1
+        if not self._last_error_logged:
+            msg = str(last_err)[:100] if last_err else "unknown"
+            if self.error_callback:
+                self.error_callback(f"[EV Charger] Connection failed: {msg}")
+            self._last_error_logged = True
 
     def _poll_status(self) -> None:
         """Read current charger status from tinytuya."""
@@ -366,12 +421,22 @@ class TuyaChargerManager:
     def _handle_error(self, e: Exception) -> None:
         """Handle connection or command errors."""
         error_msg = str(e)
+        low = error_msg.lower()
+        # Treat protocol-mismatch indicators as a streak — triggers v3.4/v3.5 probe.
+        # Feyree devices commonly return "Check device key or version" rather than "invalid json".
+        if ("invalid json" in low
+                or "key or version" in low
+                or "unexpected payload" in low):
+            self._json_error_streak += 1
+        else:
+            self._json_error_streak = 0
         if not self._last_error_logged:
             summary = error_msg[:100]
             if self.error_callback:
                 self.error_callback(f"[EV Charger] Error: {summary}")
             self._last_error_logged = True
         self.state.is_connected = False
+        self._was_disconnected = True
         # Force-close stale socket before reconnect
         if self._device is not None:
             try:
