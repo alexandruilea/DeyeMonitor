@@ -533,8 +533,8 @@ class DeyeApp(ctk.CTk):
             self._last_applied_schedule = None
         
         # Update UI status
-        self.after(0, lambda: self.schedule_panel.update_status(active_schedule))
-        
+        # (Will be updated with sell suppression state once determined below)
+
         # Determine what settings to apply
         if active_schedule is not None:
             target_max = active_schedule["max_charge_amps"]
@@ -544,18 +544,24 @@ class DeyeApp(ctk.CTk):
             target_sell_power = active_schedule.get("sell_power", 0)
             min_batt_pct = active_schedule.get("min_batt_pct", 0)
 
-            # Suppress sell when battery SOC is below the slot's minimum
+            # Suppress sell when battery SOC is below or equal to the slot's minimum.
+            # Triggers if the sell switch is enabled OR if sell_power is configured > cutoff power.
             current_soc = data.soc if data is not None else 100
-            sell_soc_suppressed = target_sell and min_batt_pct > 0 and current_soc < min_batt_pct
+            selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
+            sell_soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
             if sell_soc_suppressed:
                 if not getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = True
-                    print(f"[SCHEDULE] Battery sell suppressed: SOC {current_soc}% < min {min_batt_pct}%")
+                    print(f"[SCHEDULE] Battery sell suppressed: SOC {current_soc}% <= min {min_batt_pct}% (cutoff power: {deye_config.sell_cutoff_power}W)")
                 target_sell = False
+                target_sell_power = deye_config.sell_cutoff_power
             else:
                 if getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = False
-                    print(f"[SCHEDULE] Battery sell restored: SOC {current_soc}% >= min {min_batt_pct}%")
+                    print(f"[SCHEDULE] Battery sell restored: SOC {current_soc}% > min {min_batt_pct}% (sell power: {target_sell_power}W)")
+
+            # Update UI status with cutoff indicator if suppressed
+            self.after(0, lambda a=active_schedule, s=sell_soc_suppressed: self.schedule_panel.update_status(a, sell_suppressed=s))
 
             schedule_key = (
                 active_schedule["start_hour"],
@@ -576,6 +582,23 @@ class DeyeApp(ctk.CTk):
             target_discharge = defaults["max_discharge_amps"]
             target_sell = defaults.get("sell", False)
             target_sell_power = defaults.get("sell_power", 0)
+            min_batt_pct = defaults.get("min_batt_pct", 0)
+
+            current_soc = data.soc if data is not None else 100
+            selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
+            sell_soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
+            if sell_soc_suppressed:
+                if not getattr(self, "_sell_soc_suppressed", False):
+                    self._sell_soc_suppressed = True
+                    print(f"[SCHEDULE] Battery sell suppressed: SOC {current_soc}% <= min {min_batt_pct}% (cutoff power: {deye_config.sell_cutoff_power}W)")
+                target_sell = False
+                target_sell_power = deye_config.sell_cutoff_power
+            else:
+                if getattr(self, "_sell_soc_suppressed", False):
+                    self._sell_soc_suppressed = False
+                    print(f"[SCHEDULE] Battery sell restored: SOC {current_soc}% > min {min_batt_pct}% (sell power: {target_sell_power}W)")
+
+            self.after(0, lambda: self.schedule_panel.update_status(None))
             schedule_key = ("default", target_max, target_grid, target_discharge, target_sell, target_sell_power)
 
         # Include off-grid flag in the cache key so a grid transition forces a write
@@ -605,12 +628,13 @@ class DeyeApp(ctk.CTk):
 
         # While the gate is closed, treat max_charge as if it were already in
         # sync so we don't re-enter the apply block every poll just for that
-        # register. Other mismatches (grid charge, discharge) still apply.
+        # register. Other mismatches (grid charge, discharge, sell power) still apply.
         max_charge_in_sync = (self._current_max_charge == effective_target_max
                               or not charge_gate_open)
         register_in_sync = (max_charge_in_sync and
                             self._current_grid_charge == target_grid and
-                            self._current_max_discharge == target_discharge)
+                            self._current_max_discharge == target_discharge and
+                            self._current_sell_power == target_sell_power)
 
         # Determine work mode: 0 = Selling First, 1/2 = Zero Export (from config)
         target_work_mode = 0 if target_sell else deye_config.zero_export_mode
@@ -623,7 +647,12 @@ class DeyeApp(ctk.CTk):
             return
         
         # Apply the settings - only write values that actually changed
-        sell_str = f", Sell={target_sell_power}W" if target_sell else ""
+        if target_sell_power > deye_config.sell_cutoff_power:
+            sell_str = f", Sell={target_sell_power}W"
+        elif active_schedule and (active_schedule.get("sell") or active_schedule.get("sell_power", 0) > deye_config.sell_cutoff_power):
+            sell_str = f", Sell Cutoff={target_sell_power}W"
+        else:
+            sell_str = ""
         if active_schedule:
             print(f"[SCHEDULE] Applying slot: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
         else:
@@ -674,25 +703,20 @@ class DeyeApp(ctk.CTk):
                 self.after(0, lambda: self.protection_panel.set_enabled(False))
                 print("[SCHEDULE] Boost protection paused (sell mode active)")
         elif not target_sell and self._protection_disabled_by_sell:
-            # Restore max sell power to config value before re-enabling protection
-            config_sell_power = protection_config.max_sell_power
-            if self._current_sell_power != config_sell_power:
-                if self.inverter.set_max_sell_power(config_sell_power):
-                    self._current_sell_power = config_sell_power
-                    self.after(0, lambda p=config_sell_power: self.protection_panel.set_max_sell_power(p))
-                    print(f"[SCHEDULE] Max sell power restored to {config_sell_power}W")
             self._protection_disabled_by_sell = False
             self.after(0, lambda: self.protection_panel.set_enabled(True))
             print("[SCHEDULE] Boost protection restored (sell mode ended)")
         
         # Set max sell power for every slot — applies regardless of sell flag so
         # transitioning out of a sell slot (e.g. 1500W night → 16000W morning)
-        # always writes the new value even when sell=False.
+        # or suppressing sell (e.g. 3000W -> 0W cutoff) always writes the new value.
         if self._current_sell_power != target_sell_power:
             if self.inverter.set_max_sell_power(target_sell_power):
                 self._current_sell_power = target_sell_power
-                # Also update the boost protection panel to match
-                self.after(0, lambda p=target_sell_power: self.protection_panel.set_max_sell_power(p))
+                # Only update the boost protection panel if target_sell_power is a normal operating limit (> 0)
+                # to avoid overriding protection settings with 0W cutoff.
+                if target_sell_power > 0:
+                    self.after(0, lambda p=target_sell_power: self.protection_panel.set_max_sell_power(p))
                 print(f"[SCHEDULE] Max sell power set to {target_sell_power}W")
             else:
                 all_success = False

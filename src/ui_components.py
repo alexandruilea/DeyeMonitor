@@ -918,14 +918,21 @@ class TimeSchedulePanel(ctk.CTkFrame):
         except ValueError:
             return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150, "sell": False, "sell_power": 0, "min_batt_pct": 20}
     
-    def update_status(self, active_schedule: dict = None) -> None:
+    def update_status(self, active_schedule: dict = None, sell_suppressed: bool = False) -> None:
         """Update the status label to show current state."""
         if not self.enabled_var.get():
             self.lbl_status.configure(text="Disabled", text_color="gray")
         elif active_schedule:
             start = f"{active_schedule['start_hour']:02d}:{active_schedule['start_min']:02d}"
             end = f"{active_schedule['end_hour']:02d}:{active_schedule['end_min']:02d}"
-            sell_info = f" Sell:{active_schedule['sell_power']}W" if active_schedule.get('sell') else ""
+            sell_power_val = active_schedule.get('sell_power', 0)
+            if active_schedule.get('sell') or sell_power_val > deye_config.sell_cutoff_power:
+                if sell_suppressed:
+                    sell_info = f" Sell:{sell_power_val}W [Cutoff {deye_config.sell_cutoff_power}W @ SOC≤{active_schedule.get('min_batt_pct', 0)}%]"
+                else:
+                    sell_info = f" Sell:{sell_power_val}W"
+            else:
+                sell_info = ""
             self.lbl_status.configure(
                 text=f"Active: {start}-{end} | Max:{active_schedule['max_charge_amps']}A Grid:{active_schedule['grid_charge_amps']}A Discharge:{active_schedule['max_discharge_amps']}A{sell_info}",
                 text_color="#2ECC71"
