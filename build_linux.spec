@@ -35,6 +35,7 @@ a = Analysis(
         'src.tuya_heatpump',
         'src.tuya_heatpump_logic',
         'src.ev_logic',
+        'src.weather_forecast',
         'tinytuya',
         'astral',
         'astral.sun',

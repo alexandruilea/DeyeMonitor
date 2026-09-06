@@ -133,6 +133,9 @@ class DeyeApp(ctk.CTk):
         self._selling_first_paused = False
         self._load_high_since: float | None = None  # When load first crossed threshold continuously
         self._load_low_since: float | None = None   # When load first dropped below continuously
+        self._sell_load_high_since: float | None = None  # When load first crossed high_load_kw for sell suppression
+        self._sell_load_low_since: float | None = None   # When load first dropped below high_load_kw for sell suppression
+        self._sell_load_suppressed = False               # Whether selling is suppressed due to high load
         self._prev_ev_total_load_w: int = 0  # Previous total load for EV car-connect spike detection
         # Force the next sunset write to bypass the inverter-settled gate. Set on
         # resume from selling-first pause so the post-handover boost cannot get
@@ -532,8 +535,26 @@ class DeyeApp(ctk.CTk):
             # Force re-application so the new effective target is written immediately
             self._last_applied_schedule = None
         
-        # Update UI status
-        # (Will be updated with sell suppression state once determined below)
+        # Track high load for sell suppression (e.g. EV charging / heat pump)
+        total_load_kw = sum(data.total_loads) / 1000.0 if data is not None else 0.0
+        high_load_kw = deye_config.high_load_kw
+        hold_sec = deye_config.high_load_hold_minutes * 60.0
+        current_time = time.time()
+
+        if total_load_kw >= high_load_kw:
+            self._sell_load_low_since = None
+            if self._sell_load_high_since is None:
+                self._sell_load_high_since = current_time
+            if not self._sell_load_suppressed and (current_time - self._sell_load_high_since) >= hold_sec:
+                self._sell_load_suppressed = True
+                print(f"[SCHEDULE] Battery sell high-load suppression triggered: load {total_load_kw:.1f}kW >= {high_load_kw:.1f}kW for {deye_config.high_load_hold_minutes:.0f}min")
+        else:
+            self._sell_load_high_since = None
+            if self._sell_load_low_since is None:
+                self._sell_load_low_since = current_time
+            if self._sell_load_suppressed and (current_time - self._sell_load_low_since) >= hold_sec:
+                self._sell_load_suppressed = False
+                print(f"[SCHEDULE] Battery sell high-load suppression cleared: load {total_load_kw:.1f}kW < {high_load_kw:.1f}kW for {deye_config.high_load_hold_minutes:.0f}min")
 
         # Determine what settings to apply
         if active_schedule is not None:
@@ -544,24 +565,35 @@ class DeyeApp(ctk.CTk):
             target_sell_power = active_schedule.get("sell_power", 0)
             min_batt_pct = active_schedule.get("min_batt_pct", 0)
 
-            # Suppress sell when battery SOC is below or equal to the slot's minimum.
-            # Triggers if the sell switch is enabled OR if sell_power is configured > cutoff power.
+            # Suppress sell when battery SOC is below/equal minimum or when local load is high
             current_soc = data.soc if data is not None else 100
             selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
-            sell_soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
-            if sell_soc_suppressed:
+            soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
+            load_suppressed = selling_intended and self._sell_load_suppressed
+            sell_suppressed = soc_suppressed or load_suppressed
+
+            if soc_suppressed:
                 if not getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = True
-                    print(f"[SCHEDULE] Battery sell suppressed: SOC {current_soc}% <= min {min_batt_pct}% (cutoff power: {deye_config.sell_cutoff_power}W)")
-                target_sell = False
-                target_sell_power = deye_config.sell_cutoff_power
+                    print(f"[SCHEDULE] Battery sell SOC-suppressed: SOC {current_soc}% <= min {min_batt_pct}% (cutoff power: {deye_config.sell_cutoff_power}W)")
             else:
                 if getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = False
-                    print(f"[SCHEDULE] Battery sell restored: SOC {current_soc}% > min {min_batt_pct}% (sell power: {target_sell_power}W)")
+                    print(f"[SCHEDULE] Battery sell SOC-suppression cleared: SOC {current_soc}% > min {min_batt_pct}%")
+
+            if sell_suppressed:
+                target_sell = False
+                target_sell_power = deye_config.sell_cutoff_power
+
+            reasons = []
+            if soc_suppressed:
+                reasons.append(f"SOC≤{min_batt_pct}%")
+            if load_suppressed:
+                reasons.append(f"Load≥{high_load_kw:.1f}kW")
+            suppression_reason = ", ".join(reasons)
 
             # Update UI status with cutoff indicator if suppressed
-            self.after(0, lambda a=active_schedule, s=sell_soc_suppressed: self.schedule_panel.update_status(a, sell_suppressed=s))
+            self.after(0, lambda a=active_schedule, s=sell_suppressed, r=suppression_reason: self.schedule_panel.update_status(a, sell_suppressed=s, suppression_reason=r))
 
             schedule_key = (
                 active_schedule["start_hour"],
@@ -586,17 +618,22 @@ class DeyeApp(ctk.CTk):
 
             current_soc = data.soc if data is not None else 100
             selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
-            sell_soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
-            if sell_soc_suppressed:
+            soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
+            load_suppressed = selling_intended and self._sell_load_suppressed
+            sell_suppressed = soc_suppressed or load_suppressed
+
+            if soc_suppressed:
                 if not getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = True
-                    print(f"[SCHEDULE] Battery sell suppressed: SOC {current_soc}% <= min {min_batt_pct}% (cutoff power: {deye_config.sell_cutoff_power}W)")
-                target_sell = False
-                target_sell_power = deye_config.sell_cutoff_power
+                    print(f"[SCHEDULE] Battery sell SOC-suppressed: SOC {current_soc}% <= min {min_batt_pct}% (cutoff power: {deye_config.sell_cutoff_power}W)")
             else:
                 if getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = False
-                    print(f"[SCHEDULE] Battery sell restored: SOC {current_soc}% > min {min_batt_pct}% (sell power: {target_sell_power}W)")
+                    print(f"[SCHEDULE] Battery sell SOC-suppression cleared: SOC {current_soc}% > min {min_batt_pct}%")
+
+            if sell_suppressed:
+                target_sell = False
+                target_sell_power = deye_config.sell_cutoff_power
 
             self.after(0, lambda: self.schedule_panel.update_status(None))
             schedule_key = ("default", target_max, target_grid, target_discharge, target_sell, target_sell_power)

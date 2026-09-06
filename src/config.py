@@ -49,7 +49,9 @@ class DeyeConfig:
     default_grid_charge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_GRID_CHARGE_AMPS", "40")))
     default_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_DISCHARGE_AMPS", "150")))
     zero_export_mode: int = field(default_factory=lambda: int(os.getenv("DEYE_ZERO_EXPORT_MODE", "2")))  # 1=Zero Export to Load (internal CT), 2=Zero Export to CT (external CT)
-    sell_cutoff_power: int = field(default_factory=lambda: int(os.getenv("SCHEDULE_SELL_CUTOFF_POWER", "0")))  # Max sell power (W) sent to inverter when battery SOC <= min_batt_pct
+    sell_cutoff_power: int = field(default_factory=lambda: int(os.getenv("SCHEDULE_SELL_CUTOFF_POWER", "0")))  # Max sell power (W) sent to inverter when battery SOC <= min_batt_pct or during high load
+    high_load_kw: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_KW", "6.0")))  # House load threshold that triggers sell cutoff & sunset pause (kW)
+    high_load_hold_minutes: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_HOLD_MIN", "5.0")))  # Minutes load must stay above/below threshold
     min_register_write_interval: int = field(default_factory=lambda: int(os.getenv("DEYE_MIN_REGISTER_WRITE_INTERVAL", "30")))  # Minimum seconds between writes to the same register (reduces flash wear)
     export_leak_protection_enabled: bool = field(default_factory=lambda: os.getenv("EXPORT_LEAK_PROTECTION_ENABLED", "true").lower() == "true")  # Force zero-export + sell OFF + max charge when inverter leaks PV to grid instead of charging the battery. Set to false to test the inverter's native production→loads→sell→charge behavior.
 
@@ -314,14 +316,14 @@ class SunsetChargingConfig:
     enabled_at_startup: bool = field(default_factory=lambda: os.getenv("SUNSET_CHARGING_ENABLED", "true").lower() == "true")
     weather_enabled: bool = field(default_factory=lambda: os.getenv("SUNSET_WEATHER_ENABLED", "true").lower() == "true")
     weather_refresh_hours: float = field(default_factory=lambda: float(os.getenv("SUNSET_WEATHER_REFRESH_HOURS", "3")))
-    # "Selling first": when total house load stays above selling_first_load_kw for
-    # selling_first_hold_minutes AND day solar quality is at least
+    # "Selling first": when total house load stays above high_load_kw for
+    # high_load_hold_minutes AND day solar quality is at least
     # selling_first_quality_threshold, sunset charging temporarily pauses and hands
     # control back to the base schedule + battery boost protection. This lets the
     # PV cover the high load (heatpump / EV) without the inverter curtailing.
     selling_first_enabled: bool = field(default_factory=lambda: os.getenv("SUNSET_SELLING_FIRST_ENABLED", "false").lower() == "true")
-    selling_first_load_kw: float = field(default_factory=lambda: float(os.getenv("SUNSET_SELLING_FIRST_LOAD_KW", "6.0")))
-    selling_first_hold_minutes: float = field(default_factory=lambda: float(os.getenv("SUNSET_SELLING_FIRST_HOLD_MIN", "5.0")))
+    selling_first_load_kw: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_KW", "6.0")))
+    selling_first_hold_minutes: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_HOLD_MIN", "5.0")))
     selling_first_quality_threshold: float = field(default_factory=lambda: float(os.getenv("SUNSET_SELLING_FIRST_QUALITY", "0.80")))
 
 

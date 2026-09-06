@@ -918,7 +918,7 @@ class TimeSchedulePanel(ctk.CTkFrame):
         except ValueError:
             return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150, "sell": False, "sell_power": 0, "min_batt_pct": 20}
     
-    def update_status(self, active_schedule: dict = None, sell_suppressed: bool = False) -> None:
+    def update_status(self, active_schedule: dict = None, sell_suppressed: bool = False, suppression_reason: str = "") -> None:
         """Update the status label to show current state."""
         if not self.enabled_var.get():
             self.lbl_status.configure(text="Disabled", text_color="gray")
@@ -928,7 +928,8 @@ class TimeSchedulePanel(ctk.CTkFrame):
             sell_power_val = active_schedule.get('sell_power', 0)
             if active_schedule.get('sell') or sell_power_val > deye_config.sell_cutoff_power:
                 if sell_suppressed:
-                    sell_info = f" Sell:{sell_power_val}W [Cutoff {deye_config.sell_cutoff_power}W @ SOC≤{active_schedule.get('min_batt_pct', 0)}%]"
+                    reason_text = f" @ {suppression_reason}" if suppression_reason else f" @ SOC≤{active_schedule.get('min_batt_pct', 0)}%"
+                    sell_info = f" Sell:{sell_power_val}W [Cutoff {deye_config.sell_cutoff_power}W{reason_text}]"
                 else:
                     sell_info = f" Sell:{sell_power_val}W"
             else:
