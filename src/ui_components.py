@@ -1583,40 +1583,47 @@ class EVChargerPanel(ctk.CTkFrame):
         # ── Settings row 1: amps, SOC thresholds ────────────────────
         sf = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
         sf.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
-        sf.grid_columnconfigure((1, 3, 5, 7, 9, 11, 15), weight=1)
+        sf.grid_columnconfigure((1, 4, 7, 10, 13, 16), weight=1)
 
-        ctk.CTkLabel(sf, text="Min Amps:", font=("Roboto", 10, "bold"),
-                      text_color="#1ABC9C").grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
-        self.min_amps = ctk.CTkEntry(sf, width=50, justify="center")
-        self.min_amps.grid(row=0, column=1, padx=5, pady=8)
-        self.min_amps.insert(0, str(ev_charger_config.min_amps))
-        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="Min 1P:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=0, column=0, padx=(10, 2), pady=8, sticky="w")
+        self.min_amps_1p = ctk.CTkEntry(sf, width=45, justify="center")
+        self.min_amps_1p.grid(row=0, column=1, padx=2, pady=8)
+        self.min_amps_1p.insert(0, str(ev_charger_config.min_amps_1p))
+        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 6), pady=8)
 
-        ctk.CTkLabel(sf, text="Max Amps:", font=("Roboto", 10, "bold"),
-                      text_color="#1ABC9C").grid(row=0, column=3, padx=5, pady=8, sticky="w")
-        self.max_amps = ctk.CTkEntry(sf, width=50, justify="center")
-        self.max_amps.grid(row=0, column=4, padx=5, pady=8)
+        ctk.CTkLabel(sf, text="Min 3P:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=0, column=3, padx=(4, 2), pady=8, sticky="w")
+        self.min_amps_3p = ctk.CTkEntry(sf, width=45, justify="center")
+        self.min_amps_3p.grid(row=0, column=4, padx=2, pady=8)
+        self.min_amps_3p.insert(0, str(ev_charger_config.min_amps_3p))
+        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 6), pady=8)
+
+        ctk.CTkLabel(sf, text="Max:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=0, column=6, padx=(4, 2), pady=8, sticky="w")
+        self.max_amps = ctk.CTkEntry(sf, width=45, justify="center")
+        self.max_amps.grid(row=0, column=7, padx=2, pady=8)
         self.max_amps.insert(0, str(ev_charger_config.max_amps))
-        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="A", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 6), pady=8)
 
-        ctk.CTkLabel(sf, text="Start SOC:", font=("Roboto", 10)).grid(row=0, column=6, padx=5, pady=8, sticky="w")
-        self.start_soc = ctk.CTkEntry(sf, width=50, justify="center")
-        self.start_soc.grid(row=0, column=7, padx=5, pady=8)
+        ctk.CTkLabel(sf, text="Start SOC:", font=("Roboto", 10)).grid(row=0, column=9, padx=(4, 2), pady=8, sticky="w")
+        self.start_soc = ctk.CTkEntry(sf, width=45, justify="center")
+        self.start_soc.grid(row=0, column=10, padx=2, pady=8)
         self.start_soc.insert(0, str(ev_charger_config.start_soc))
-        ctk.CTkLabel(sf, text="%", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="%", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 6), pady=8)
 
-        ctk.CTkLabel(sf, text="Stop SOC:", font=("Roboto", 10)).grid(row=0, column=9, padx=5, pady=8, sticky="w")
-        self.stop_soc = ctk.CTkEntry(sf, width=50, justify="center")
-        self.stop_soc.grid(row=0, column=10, padx=5, pady=8)
+        ctk.CTkLabel(sf, text="Stop SOC:", font=("Roboto", 10)).grid(row=0, column=12, padx=(4, 2), pady=8, sticky="w")
+        self.stop_soc = ctk.CTkEntry(sf, width=45, justify="center")
+        self.stop_soc.grid(row=0, column=13, padx=2, pady=8)
         self.stop_soc.insert(0, str(ev_charger_config.stop_soc))
-        ctk.CTkLabel(sf, text="%", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="%", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 6), pady=8)
 
         ctk.CTkLabel(sf, text="Charge by:", font=("Roboto", 10),
-                      text_color="#95A5A6").grid(row=0, column=12, padx=5, pady=8, sticky="w")
+                      text_color="#95A5A6").grid(row=0, column=15, padx=(4, 2), pady=8, sticky="w")
         self.charge_by_hour = ctk.CTkEntry(sf, width=50, justify="center")
-        self.charge_by_hour.grid(row=0, column=13, padx=5, pady=8)
+        self.charge_by_hour.grid(row=0, column=16, padx=2, pady=8)
         self.charge_by_hour.insert(0, f"{ev_charger_config.charge_by_hour}:00")
-        ctk.CTkLabel(sf, text="h", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 10), pady=8)
+        ctk.CTkLabel(sf, text="h", font=("Roboto", 10)).grid(row=0, column=17, padx=(0, 10), pady=8)
 
         # ── Settings row 2: cooldown & solar mode ───────────────────
         ctk.CTkLabel(sf, text="Cooldown:", font=("Roboto", 10),
@@ -1678,6 +1685,21 @@ class EVChargerPanel(ctk.CTkFrame):
         if ev_charger_config.ev_first:
             self.ev_first_switch.select()
 
+        # Phase selector: Auto / 1-Phase / 3-Phase
+        ctk.CTkLabel(sf, text="Phases:", font=("Roboto", 10, "bold"),
+                      text_color="#1ABC9C").grid(row=2, column=11, padx=(15, 5), pady=8, sticky="e")
+        init_phase_text = "3-Phase" if str(ev_charger_config.phases).lower() in ("3", "3p", "three") else (
+            "1-Phase" if str(ev_charger_config.phases).lower() in ("1", "1p", "single") else "Auto"
+        )
+        self.phases_var = ctk.StringVar(value=init_phase_text)
+        self.phases_menu = ctk.CTkOptionMenu(
+            sf, values=["Auto", "1-Phase", "3-Phase"],
+            variable=self.phases_var, width=95, height=24,
+            font=("Roboto", 10),
+            command=self._on_phases_change
+        )
+        self.phases_menu.grid(row=2, column=12, columnspan=2, padx=(0, 10), pady=8, sticky="w")
+
 
 
         # ── Live state display ──────────────────────────────────────
@@ -1726,6 +1748,10 @@ class EVChargerPanel(ctk.CTkFrame):
         if self.on_settings_change:
             self.on_settings_change()
 
+    def _on_phases_change(self, choice: str = None) -> None:
+        if self.on_settings_change:
+            self.on_settings_change()
+
     def _on_boost_click(self) -> None:
         current = self.boost_var.get()
         self.boost_var.set(not current)
@@ -1733,6 +1759,8 @@ class EVChargerPanel(ctk.CTkFrame):
             self.boost_btn.configure(fg_color="#E67E22", text="\u26A1 BOOST ON")
         else:
             self.boost_btn.configure(fg_color="#555555", text="\u26A1 Boost")
+        if self.on_settings_change:
+            self.on_settings_change()
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -1742,9 +1770,22 @@ class EVChargerPanel(ctk.CTkFrame):
     def get_settings(self) -> dict:
         """Return current settings as a dict matching EVSettings fields."""
         try:
+            phases_raw = self.phases_var.get().lower()
+            if "1" in phases_raw:
+                phases = "1"
+            elif "3" in phases_raw:
+                phases = "3"
+            else:
+                phases = "auto"
+
+            min_1p = int(self.min_amps_1p.get())
+            min_3p = int(self.min_amps_3p.get())
+
             return {
                 "enabled": self.enabled_var.get(),
-                "min_amps": int(self.min_amps.get()),
+                "min_amps": min_1p,
+                "min_amps_1p": min_1p,
+                "min_amps_3p": min_3p,
                 "max_amps": int(self.max_amps.get()),
                 "stop_soc": int(self.stop_soc.get()),
                 "start_soc": int(self.start_soc.get()),
@@ -1757,11 +1798,15 @@ class EVChargerPanel(ctk.CTkFrame):
                 "solar_amp_steps": tuple(int(x.strip()) for x in self.amp_steps.get().split(",")),
                 "ev_first": self.ev_first_var.get(),
                 "boost": self.boost_var.get(),
+                "phases": phases,
+                "auto_default_phases": ev_charger_config.auto_default_phases,
             }
         except (ValueError, TypeError):
             return {
                 "enabled": False,
-                "min_amps": ev_charger_config.min_amps,
+                "min_amps": ev_charger_config.min_amps_1p,
+                "min_amps_1p": ev_charger_config.min_amps_1p,
+                "min_amps_3p": ev_charger_config.min_amps_3p,
                 "max_amps": ev_charger_config.max_amps,
                 "stop_soc": ev_charger_config.stop_soc,
                 "start_soc": ev_charger_config.start_soc,
@@ -1774,30 +1819,43 @@ class EVChargerPanel(ctk.CTkFrame):
                 "solar_amp_steps": ev_charger_config.solar_amp_steps,
                 "ev_first": False,
                 "boost": False,
+                "phases": ev_charger_config.phases,
+                "auto_default_phases": ev_charger_config.auto_default_phases,
             }
+
     def update_ev_state(self, connected: bool, is_on: bool, charging: bool,
                         error_state: str, current_amps: int, result_text: str,
-                        detail: str, is_cloud: bool = False) -> None:
+                        detail: str, is_cloud: bool = False,
+                        phase_label: str = "1P", power_w: int = 0) -> None:
         """Update the live state display labels."""
         # Charger connection status
         cloud_tag = " ☁" if is_cloud else ""
+        phase_str = str(phase_label) if str(phase_label).endswith("P") or "P" in str(phase_label) else f"{phase_label}P"
+        phase_tag = f" ({phase_str})" if phase_str else ""
         if not connected:
             self.lbl_charger_status.configure(text="Charger: Offline", text_color="#E74C3C")
         elif error_state:
             self.lbl_charger_status.configure(text=f"Charger: Error ({error_state}){cloud_tag}", text_color="#E74C3C")
         elif charging:
-            self.lbl_charger_status.configure(text=f"Charger: Charging{cloud_tag}", text_color="#2ECC71")
+            self.lbl_charger_status.configure(text=f"Charger: Charging{phase_tag}{cloud_tag}", text_color="#2ECC71")
         elif is_on:
             self.lbl_charger_status.configure(text=f"Charger: ON (waiting for EV){cloud_tag}", text_color="#F39C12")
         else:
             self.lbl_charger_status.configure(text=f"Charger: Standby{cloud_tag}", text_color="#888888")
 
-        # Current amps
+        # Current amps and power
         if connected:
-            self.lbl_ev_amps.configure(
-                text=f"Amps: {current_amps}A",
-                text_color="#1ABC9C" if charging else "#888888"
-            )
+            if charging and power_w > 0:
+                kw_str = f"{power_w / 1000.0:.1f}kW" if power_w >= 1000 else f"{power_w}W"
+                self.lbl_ev_amps.configure(
+                    text=f"Amps: {current_amps}A ({phase_str}, {kw_str})",
+                    text_color="#1ABC9C"
+                )
+            else:
+                self.lbl_ev_amps.configure(
+                    text=f"Amps: {current_amps}A{phase_tag}",
+                    text_color="#888888"
+                )
         else:
             self.lbl_ev_amps.configure(text="Amps: --", text_color="#888888")
 
@@ -1817,7 +1875,8 @@ class EVChargerPanel(ctk.CTkFrame):
             "EV Disabled": "gray",
             "Charger Offline": "#E74C3C",
         }
-        self.lbl_ev_result.configure(text=full, text_color=color_map.get(result_text, "#888888"))
+        res_color = "#E67E22" if "BOOST" in full or "BOOST" in result_text else color_map.get(result_text, "#888888")
+        self.lbl_ev_result.configure(text=full, text_color=res_color)
 
 
 class HeatpumpScheduleRow(ctk.CTkFrame):

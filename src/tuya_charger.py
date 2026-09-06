@@ -26,6 +26,10 @@ class ChargerState:
     is_cloud: bool = False       # True when connected via cloud fallback
     # Timestamps for rate-limiting
     last_change_time: float = 0.0
+    # Phase measurements directly from charger DPs
+    phase_currents: tuple = (0.0, 0.0, 0.0)   # DPs 105, 106, 107 (Amps)
+    phase_voltages: tuple = (0.0, 0.0, 0.0)   # DPs 102, 103, 104 (Volts)
+    power_w: int = 0                         # DP 109 (Watts)
 
 
 class TuyaChargerManager:
@@ -90,7 +94,12 @@ class TuyaChargerManager:
 
     def set_amps(self, amps: int) -> None:
         """Request an amperage change (applied on next poll cycle respecting rate limit)."""
-        amps = max(self.config.min_amps, min(amps, self.config.max_amps))
+        abs_min = min(
+            getattr(self.config, "min_amps_1p", 6),
+            getattr(self.config, "min_amps_3p", 6),
+            getattr(self.config, "min_amps", 6),
+        )
+        amps = max(abs_min, min(amps, self.config.max_amps))
         with self._lock:
             self._pending_amps = amps
         self._command_event.set()
@@ -350,6 +359,21 @@ class TuyaChargerManager:
         if amps_dp in self._known_dps and time.time() > self._write_grace_until:
             raw_amps = self._known_dps[amps_dp]
             self.state.current_amps = int(raw_amps) // self.config.dp_amps_scale
+
+        # Read phase voltages if present (DP 102, 103, 104: 0.1V units, e.g. 2276 = 227.6V)
+        v1 = float(self._known_dps.get("102", 0)) / 10.0
+        v2 = float(self._known_dps.get("103", 0)) / 10.0
+        v3 = float(self._known_dps.get("104", 0)) / 10.0
+        if v1 > 0 or v2 > 0 or v3 > 0:
+            self.state.phase_voltages = (v1, v2, v3)
+
+        # Read phase currents if present (DP 105, 106, 107)
+        c1 = float(self._known_dps.get("105", 0))
+        c2 = float(self._known_dps.get("106", 0))
+        c3 = float(self._known_dps.get("107", 0))
+        scale = 10.0 if (c1 > 50 or c2 > 50 or c3 > 50) else 1.0
+        self.state.phase_currents = (round(c1 / scale, 1), round(c2 / scale, 1), round(c3 / scale, 1))
+
         self.state.is_connected = True
 
     def _apply_pending(self) -> None:

@@ -1633,14 +1633,16 @@ class DeyeApp(ctk.CTk):
         if self.ev_logic is None:
             if ui_settings["enabled"] and ev_charger_config.device_id:
                 self.ev_charger = TuyaChargerManager(ev_charger_config, error_callback=self._log_error)
-                self.ev_logic = EVChargingLogic(self.ev_charger)
+                self.ev_logic = EVChargingLogic(self.ev_charger, auto_default_phases=ev_charger_config.auto_default_phases)
             else:
                 return
         sunset_settings = self.sunset_panel.get_settings()
 
         settings = EVSettings(
             enabled=ui_settings["enabled"],
-            min_amps=ui_settings["min_amps"],
+            min_amps=ui_settings.get("min_amps", 8),
+            min_amps_1p=ui_settings.get("min_amps_1p", 20),
+            min_amps_3p=ui_settings.get("min_amps_3p", 8),
             max_amps=ui_settings["max_amps"],
             stop_soc=ui_settings["stop_soc"],
             start_soc=ui_settings["start_soc"],
@@ -1654,10 +1656,17 @@ class DeyeApp(ctk.CTk):
             solar_amp_steps=ui_settings.get("solar_amp_steps", (8, 16, 24, 32)),
             ev_first=ui_settings.get("ev_first", False),
             boost=ui_settings.get("boost", False),
+            phases=ui_settings.get("phases", "auto"),
+            auto_default_phases=ui_settings.get("auto_default_phases", ev_charger_config.auto_default_phases),
         )
 
         result, detail = self.ev_logic.process(data, settings)
         charger_state = self.ev_charger.get_state()
+        active_phases = self.ev_logic.active_phases
+        single_phase_idx = self.ev_logic.single_phase_idx
+        phase_label = "3P" if active_phases == 3 else f"1P-L{single_phase_idx + 1}"
+        eff_voltage = self.ev_logic._get_effective_voltage(data, active_phases, single_phase_idx)
+        power_w = int(charger_state.current_amps * eff_voltage) if charger_state.is_charging else 0
 
         # Load-spike hint: if total consumption jumps >5 kW while charger is idle,
         # a car may have just plugged in — wake the charger poll immediately (once)
@@ -1670,11 +1679,12 @@ class DeyeApp(ctk.CTk):
         self._prev_ev_total_load_w = total_load_w
 
         # Log only on state changes to avoid spam
-        # For solar charging, ignore wattage fluctuations — dedup on amps only
+        # For solar charging, ignore wattage fluctuations — dedup on amps and phase only
         if result == EVResult.SOLAR_CHARGING:
             import re
             m = re.search(r'(\d+)A', detail)
-            ev_key = (result, m.group(1) if m else detail)
+            m_phase = re.search(r'(\d+P(?:-L\d)?)', detail)
+            ev_key = (result, m.group(1) if m else detail, m_phase.group(1) if m_phase else "")
         else:
             ev_key = (result, detail)
         if ev_key != getattr(self, "_last_ev_key", None):
@@ -1694,6 +1704,8 @@ class DeyeApp(ctk.CTk):
             result_text=result.value,
             detail=detail,
             is_cloud=charger_state.is_cloud,
+            phase_label=phase_label,
+            power_w=power_w,
         ))
 
     def _on_manual_toggle(self) -> None:

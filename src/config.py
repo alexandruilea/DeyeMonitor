@@ -200,6 +200,8 @@ class EVChargerConfig:
     local_key: str = field(default_factory=lambda: os.getenv("EV_CHARGER_LOCAL_KEY", ""))
     protocol_version: float = field(default_factory=lambda: float(os.getenv("EV_CHARGER_PROTOCOL_VERSION", "3.3")))
     min_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_MIN_AMPS", "8")))
+    min_amps_1p: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_MIN_AMPS_1P", os.getenv("EV_CHARGER_MIN_AMPS", "20"))))
+    min_amps_3p: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_MIN_AMPS_3P", "8")))
     max_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_MAX_AMPS", "32")))
     stop_soc: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_STOP_SOC", "20")))
     start_soc: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_START_SOC", "80")))
@@ -210,6 +212,8 @@ class EVChargerConfig:
     solar_ramp_down_delay: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_SOLAR_RAMP_DOWN_DELAY", "5")))  # Minutes between solar ramp-down steps
     solar_amp_steps: tuple = field(default_factory=lambda: tuple(int(x) for x in os.getenv("EV_CHARGER_SOLAR_AMP_STEPS", "8,16,24,32").split(",")))
     ev_first: bool = field(default_factory=lambda: os.getenv("EV_CHARGER_EV_FIRST", "false").lower() == "true")
+    phases: str = field(default_factory=lambda: os.getenv("EV_CHARGER_PHASES", "auto").lower())
+    auto_default_phases: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_AUTO_DEFAULT_PHASES", "3")))
     # Tuya DPS mapping (varies by charger model)
     dp_switch: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_SWITCH", "1")))
     dp_amps: int = field(default_factory=lambda: int(os.getenv("EV_CHARGER_DP_AMPS", "6")))
