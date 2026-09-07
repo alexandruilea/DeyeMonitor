@@ -321,6 +321,7 @@ class DeyeApp(ctk.CTk):
         self._current_max_discharge = None
         self._current_work_mode = None
         self._current_sell_power = None
+        self._last_prot_max_sell = None
         self._protection_disabled_by_sell = False  # Track if protection was auto-disabled by sell mode
         
         # Global Settings panel
@@ -416,6 +417,7 @@ class DeyeApp(ctk.CTk):
         max_sell = self.inverter.read_max_sell_power()
         if max_sell is not None:
             print(f"[INIT] Max sell power from inverter: {max_sell}W")
+            self._last_prot_max_sell = max_sell
             self.after(0, lambda: self.protection_panel.set_max_sell_power(max_sell))
         
         # If any default schedule has selling enabled, disable boost protection at startup
@@ -535,26 +537,35 @@ class DeyeApp(ctk.CTk):
             # Force re-application so the new effective target is written immediately
             self._last_applied_schedule = None
         
-        # Track high load for sell suppression (e.g. EV charging / heat pump)
-        total_load_kw = sum(data.total_loads) / 1000.0 if data is not None else 0.0
+        # Track high load for sell suppression (e.g. EV charging / heat pump).
+        # Only suppresses battery selling, NOT solar export: when solar covers the load
+        # (PV >= total load) or battery is actively charging (battery_power < 0), power is
+        # not being sold from the battery — it's pure solar.
+        total_load_w = sum(data.total_loads) if data is not None else 0
+        total_load_kw = total_load_w / 1000.0
+        pv_power = data.pv_power if data is not None else 0
+        battery_power = data.battery_power if data is not None else 0
         high_load_kw = deye_config.high_load_kw
         hold_sec = deye_config.high_load_hold_minutes * 60.0
         current_time = time.time()
 
-        if total_load_kw >= high_load_kw:
+        solar_covers_load = (pv_power >= total_load_w) or (battery_power < 0)
+        high_load_drawing_battery = (total_load_kw >= high_load_kw) and not solar_covers_load
+
+        if high_load_drawing_battery:
             self._sell_load_low_since = None
             if self._sell_load_high_since is None:
                 self._sell_load_high_since = current_time
             if not self._sell_load_suppressed and (current_time - self._sell_load_high_since) >= hold_sec:
                 self._sell_load_suppressed = True
-                print(f"[SCHEDULE] Battery sell high-load suppression triggered: load {total_load_kw:.1f}kW >= {high_load_kw:.1f}kW for {deye_config.high_load_hold_minutes:.0f}min")
+                print(f"[SCHEDULE] Battery sell high-load suppression triggered: load {total_load_kw:.1f}kW >= {high_load_kw:.1f}kW (drawing from battery) for {deye_config.high_load_hold_minutes:.0f}min")
         else:
             self._sell_load_high_since = None
             if self._sell_load_low_since is None:
                 self._sell_load_low_since = current_time
             if self._sell_load_suppressed and (current_time - self._sell_load_low_since) >= hold_sec:
                 self._sell_load_suppressed = False
-                print(f"[SCHEDULE] Battery sell high-load suppression cleared: load {total_load_kw:.1f}kW < {high_load_kw:.1f}kW for {deye_config.high_load_hold_minutes:.0f}min")
+                print(f"[SCHEDULE] Battery sell high-load suppression cleared: load {total_load_kw:.1f}kW < {high_load_kw:.1f}kW or covered by solar for {deye_config.high_load_hold_minutes:.0f}min")
 
         # Determine what settings to apply
         if active_schedule is not None:
@@ -562,14 +573,15 @@ class DeyeApp(ctk.CTk):
             target_grid = active_schedule["grid_charge_amps"]
             target_discharge = active_schedule["max_discharge_amps"]
             target_sell = active_schedule.get("sell", False)
-            target_sell_power = active_schedule.get("sell_power", 0)
+            configured_sell_power = active_schedule.get("sell_power", 0)
+            target_sell_power = configured_sell_power
             min_batt_pct = active_schedule.get("min_batt_pct", 0)
 
-            # Suppress sell when battery SOC is below/equal minimum or when local load is high
+            # Suppress sell when battery SOC is below/equal minimum or when local load is high and drawing from battery
             current_soc = data.soc if data is not None else 100
             selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
             soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
-            load_suppressed = selling_intended and self._sell_load_suppressed
+            load_suppressed = selling_intended and self._sell_load_suppressed and not solar_covers_load
             sell_suppressed = soc_suppressed or load_suppressed
 
             if soc_suppressed:
@@ -580,6 +592,15 @@ class DeyeApp(ctk.CTk):
                 if getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = False
                     print(f"[SCHEDULE] Battery sell SOC-suppression cleared: SOC {current_soc}% > min {min_batt_pct}%")
+
+            if load_suppressed:
+                if not getattr(self, "_sell_load_suppressed_logged", False):
+                    self._sell_load_suppressed_logged = True
+                    print(f"[SCHEDULE] Battery sell load-suppressed: load {total_load_kw:.1f}kW >= {high_load_kw:.1f}kW without solar coverage (cutoff power: {deye_config.sell_cutoff_power}W)")
+            else:
+                if getattr(self, "_sell_load_suppressed_logged", False):
+                    self._sell_load_suppressed_logged = False
+                    print(f"[SCHEDULE] Battery sell load-suppression cleared: solar covering load or load < {high_load_kw:.1f}kW")
 
             if sell_suppressed:
                 target_sell = False
@@ -613,13 +634,14 @@ class DeyeApp(ctk.CTk):
             target_grid = defaults["grid_charge_amps"]
             target_discharge = defaults["max_discharge_amps"]
             target_sell = defaults.get("sell", False)
-            target_sell_power = defaults.get("sell_power", 0)
+            configured_sell_power = defaults.get("sell_power", 0)
+            target_sell_power = configured_sell_power
             min_batt_pct = defaults.get("min_batt_pct", 0)
 
             current_soc = data.soc if data is not None else 100
             selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
             soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
-            load_suppressed = selling_intended and self._sell_load_suppressed
+            load_suppressed = selling_intended and self._sell_load_suppressed and not solar_covers_load
             sell_suppressed = soc_suppressed or load_suppressed
 
             if soc_suppressed:
@@ -630,6 +652,15 @@ class DeyeApp(ctk.CTk):
                 if getattr(self, "_sell_soc_suppressed", False):
                     self._sell_soc_suppressed = False
                     print(f"[SCHEDULE] Battery sell SOC-suppression cleared: SOC {current_soc}% > min {min_batt_pct}%")
+
+            if load_suppressed:
+                if not getattr(self, "_sell_load_suppressed_logged", False):
+                    self._sell_load_suppressed_logged = True
+                    print(f"[SCHEDULE] Battery sell load-suppressed: load {total_load_kw:.1f}kW >= {high_load_kw:.1f}kW without solar coverage (cutoff power: {deye_config.sell_cutoff_power}W)")
+            else:
+                if getattr(self, "_sell_load_suppressed_logged", False):
+                    self._sell_load_suppressed_logged = False
+                    print(f"[SCHEDULE] Battery sell load-suppression cleared: solar covering load or load < {high_load_kw:.1f}kW")
 
             if sell_suppressed:
                 target_sell = False
@@ -750,13 +781,18 @@ class DeyeApp(ctk.CTk):
         if self._current_sell_power != target_sell_power:
             if self.inverter.set_max_sell_power(target_sell_power):
                 self._current_sell_power = target_sell_power
-                # Only update the boost protection panel if target_sell_power is a normal operating limit (> 0)
-                # to avoid overriding protection settings with 0W cutoff.
-                if target_sell_power > 0:
-                    self.after(0, lambda p=target_sell_power: self.protection_panel.set_max_sell_power(p))
                 print(f"[SCHEDULE] Max sell power set to {target_sell_power}W")
             else:
                 all_success = False
+
+        # Update boost protection panel with the slot's configured operating limit,
+        # but NEVER with sell_cutoff_power (e.g. 0W or 100W) which would falsely trigger
+        # overpower protection and cause unwanted charging boosts.
+        if configured_sell_power > deye_config.sell_cutoff_power:
+            current_prot_max = getattr(self, "_last_prot_max_sell", None)
+            if current_prot_max != configured_sell_power:
+                self._last_prot_max_sell = configured_sell_power
+                self.after(0, lambda p=configured_sell_power: self.protection_panel.set_max_sell_power(p))
         
         if all_success:
             self._last_applied_schedule = schedule_key
