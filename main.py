@@ -167,6 +167,9 @@ class DeyeApp(ctk.CTk):
         
         # Track if main loop has started (for safe error logging from threads)
         self._main_loop_started = False
+
+        # EVSE status for top status display
+        self._evse_offline = False
         
         # Setup UI
         self._setup_ui()
@@ -250,14 +253,25 @@ class DeyeApp(ctk.CTk):
         )
         self.lbl_total_power.grid(row=0, column=0, padx=10, sticky="w")
         
-        # Solar sell status display
+        # Solar sell status display & EVSE offline alert
+        sell_frame = ctk.CTkFrame(stats_frame, fg_color="transparent")
+        sell_frame.grid(row=0, column=1, padx=10, sticky="w")
+
         self.lbl_solar_sell = ctk.CTkLabel(
-            stats_frame,
+            sell_frame,
             text="Sell: ON",
             font=("Roboto", 14, "bold"),
             text_color="#2ECC71"
         )
-        self.lbl_solar_sell.grid(row=0, column=1, padx=10, sticky="w")
+        self.lbl_solar_sell.pack(side="left")
+
+        self.lbl_evse_offline = ctk.CTkLabel(
+            sell_frame,
+            text="",
+            font=("Roboto", 14, "bold"),
+            text_color="#E74C3C"
+        )
+        self.lbl_evse_offline.pack(side="left")
         
         # Total load consumption per phase display
         self.lbl_load_consumption = ctk.CTkLabel(
@@ -857,6 +871,15 @@ class DeyeApp(ctk.CTk):
         """Handle EV charger panel settings change."""
         if not self.ev_panel.is_enabled():
             print("[EV] Disabled via UI")
+            if self._evse_offline:
+                self._evse_offline = False
+                self._update_evse_offline_display()
+        else:
+            if self.ev_charger is not None:
+                is_offline = not self.ev_charger.get_state().is_connected
+                if is_offline != self._evse_offline:
+                    self._evse_offline = is_offline
+                    self._update_evse_offline_display()
 
 
 
@@ -895,9 +918,6 @@ class DeyeApp(ctk.CTk):
         cutoff = current_time - 3600  # 60 minutes
         self._pv_samples = [(t, w) for t, w in self._pv_samples if t >= cutoff]
 
-        if current_time - self._last_sunset_adjustment < deye_config.min_register_write_interval:
-            return
-        
         settings = self.sunset_panel.get_settings()
         
         # Calculate sun times
@@ -928,6 +948,54 @@ class DeyeApp(ctk.CTk):
         
         weather_str = self._weather.summary_str() if self._weather_enabled else ""
         sparkline = self._weather.day_sparkline() if self._weather_enabled else ""
+
+        # Check if we should suspend sunset charging:
+        # 1. Outside daylight solar window (before sunrise or past sunset deadline)
+        # 2. No solar PV generation (night/dark: pv_power <= 50W)
+        # 3. Export is mostly from battery (intentional battery export / no solar export)
+        solar_export_w, battery_export_w, has_solar_export, is_mostly_battery = self._get_export_breakdown(data)
+        is_outside_daylight = (now < sunrise_utc or hours_left <= 0)
+        has_pv = getattr(data, "pv_power", 0) > 50
+
+        if is_outside_daylight or is_mostly_battery or not has_pv:
+            if self._sunset_active:
+                if is_mostly_battery:
+                    reason = "Battery export"
+                elif now < sunrise_utc:
+                    reason = "Before sunrise"
+                elif hours_left <= 0:
+                    reason = "After sunset"
+                else:
+                    reason = "No PV"
+                print(f"[SUNSET] Suspending sunset charging ({reason}) - clearing sunset boost silently")
+                self._sunset_boost_amps = 0
+                self._sunset_active = False
+                self._cloud_boost_factor = 1.0
+                self._last_applied_schedule = None
+
+            # Determine appropriate status string for time label
+            if is_mostly_battery:
+                status_override = "Battery export"
+            elif now < sunrise_utc:
+                status_override = "Before sunrise"
+            elif hours_left <= 0:
+                status_override = "After sunset"
+            else:
+                status_override = "Standby (no PV)"
+
+            display_hours = hours_left if (hours_left > 0 and now >= sunrise_utc) else 0
+            self.after(0, lambda hl=display_hours, so=status_override: (
+                self.sunset_panel.update_state(
+                    sunset_str, hl, 0, False,
+                    1.0, weather_str, sparkline,
+                    status_override=so
+                )
+            ))
+            return
+
+        # Throttle adjustments to avoid excessive inverter writes
+        if current_time - self._last_sunset_adjustment < deye_config.min_register_write_interval:
+            return
 
         # ── "Selling First" handover ────────────────────────────────────
         # On sunny days (forecast quality ≥ threshold), if a sustained high load
@@ -1246,6 +1314,57 @@ class DeyeApp(ctk.CTk):
             sunset_str, hours_left, required_amps, self._sunset_active,
             self._cloud_boost_factor, weather_str, sparkline))
 
+    def _get_export_breakdown(self, data) -> tuple[int, int, bool, bool]:
+        """
+        Analyze current export power to determine solar vs battery contributions.
+        
+        Returns:
+            tuple: (solar_export_w, battery_export_w, has_solar_export, is_export_mostly_battery)
+            - solar_export_w: Estimated solar power being exported to grid (W)
+            - battery_export_w: Estimated battery discharge power being exported to grid (W)
+            - has_solar_export: True if there is significant solar export (>50W) and export is not mostly battery
+            - is_export_mostly_battery: True if battery discharge contributes more to export than solar (>50%)
+        """
+        if data is None:
+            return 0, 0, False, False
+
+        export_power = abs(min(0, data.grid_power))
+        if export_power <= 50:
+            return 0, 0, False, False
+
+        pv_power = max(0, getattr(data, "pv_power", 0))
+        total_loads = getattr(data, "total_loads", None)
+        total_load_w = max(0, sum(total_loads)) if total_loads else 0
+        battery_power = getattr(data, "battery_power", 0)  # positive = discharging, negative = charging
+        battery_discharge = max(0, battery_power)
+
+        if battery_discharge <= 50:
+            # Battery is charging or idle — all export comes from solar/generation
+            solar_export_w = export_power
+            battery_export_w = 0
+            has_solar_export = solar_export_w > 50
+            is_mostly_battery = False
+            return solar_export_w, battery_export_w, has_solar_export, is_mostly_battery
+
+        # Battery is discharging: determine solar surplus vs battery surplus
+        solar_surplus = max(0, pv_power - total_load_w)
+        uncovered_loads = max(0, total_load_w - pv_power)
+        battery_to_load = min(battery_discharge, uncovered_loads)
+        battery_surplus = max(0, battery_discharge - battery_to_load)
+
+        total_surplus = solar_surplus + battery_surplus
+        if total_surplus > 0:
+            solar_export_w = min(export_power, int(export_power * (solar_surplus / total_surplus)))
+            battery_export_w = export_power - solar_export_w
+        else:
+            solar_export_w = 0
+            battery_export_w = export_power
+
+        is_mostly_battery = battery_export_w > solar_export_w
+        has_solar_export = (solar_export_w > 50) and not is_mostly_battery
+
+        return solar_export_w, battery_export_w, has_solar_export, is_mostly_battery
+
     def _get_base_charge_amps(self) -> int:
         """Get the base charge amps from schedule or defaults (before protection boost)."""
         if self.schedule_panel.is_enabled():
@@ -1277,8 +1396,9 @@ class DeyeApp(ctk.CTk):
         
         # Cap expected power at available generation — the inverter can't charge
         # faster than what's available. Includes PV + AC-coupled inverter output
-        # (which appears as negative grid power / export).
-        available_power = data.pv_power + abs(min(0, data.grid_power))
+        # (which appears as solar export).
+        solar_export_w, _, _, _ = self._get_export_breakdown(data)
+        available_power = data.pv_power + solar_export_w
         if available_power > 0:
             expected_power = min(expected_power, available_power)
         
@@ -1315,6 +1435,23 @@ class DeyeApp(ctk.CTk):
             export_power, max_sell, max_voltage
         ))
         
+        # Check export breakdown: solar vs battery contribution
+        solar_export_w, battery_export_w, has_solar_export, is_mostly_battery = self._get_export_breakdown(data)
+
+        # Protection is designed to absorb excess solar power into the battery.
+        # When we don't have solar export (if the export is mostly from the battery,
+        # or there is no PV generation / night time), do not change the charging current
+        # or write to the inverter to avoid wasting flash write cycles.
+        if not has_solar_export:
+            if self._protection_boost_amps > 0:
+                print(f"[PROTECTION] Clearing boost (+{self._protection_boost_amps}A) silently - "
+                      f"no solar export (export={export_power}W, solar={solar_export_w}W, "
+                      f"batt={battery_export_w}W, pv={getattr(data, 'pv_power', 0)}W)")
+                self._protection_boost_amps = 0
+                self._protection_active = False
+            self.after(0, lambda: self.protection_panel.update_protection_state(False, 0))
+            return
+
         # Check if enough time has passed since last adjustment
         adjustment_interval = settings.get("adjustment_interval", 10)
         current_time = time.time()
@@ -1549,9 +1686,9 @@ class DeyeApp(ctk.CTk):
             and self._current_max_charge >= deye_config.max_charge_amps_limit * min_charge_setting_pct / 100
         )
         expected_charge_w = (self._current_max_charge or 0) * battery_voltage
-        # Cap expected at available generation — includes PV + AC-coupled inverter
-        # (AC-coupled output appears as negative grid power / export)
-        available_power = data.pv_power + abs(min(0, data.grid_power))
+        # Cap expected at available generation — includes PV + solar export from AC-coupled inverter
+        solar_export_w, battery_export_w, has_solar_export, is_mostly_battery = self._get_export_breakdown(data)
+        available_power = data.pv_power + solar_export_w
         if available_power > 0:
             expected_charge_w = min(expected_charge_w, available_power)
         # battery_power: positive = discharging, negative = charging
@@ -1566,6 +1703,8 @@ class DeyeApp(ctk.CTk):
             and charge_setting_high
             and barely_charging
             and is_exporting
+            and not is_mostly_battery
+            and data.battery_power <= 0
         )
 
         now = time.time()
@@ -1660,6 +1799,12 @@ class DeyeApp(ctk.CTk):
             text = "Sell: OFF"
             color = "#E74C3C"  # red
         self.after(0, lambda t=text, c=color: self.lbl_solar_sell.configure(text=t, text_color=c))
+        self._update_evse_offline_display()
+
+    def _update_evse_offline_display(self) -> None:
+        """Update the EVSE offline status label in the top stats row."""
+        offline_text = " - EVSE: Offline" if self._evse_offline else ""
+        self.after(0, lambda t=offline_text: self.lbl_evse_offline.configure(text=t))
 
     def _process_ev_charging(self, data: InverterData) -> None:
         """Process EV charger logic (called from background thread)."""
@@ -1671,7 +1816,21 @@ class DeyeApp(ctk.CTk):
                 self.ev_charger = TuyaChargerManager(ev_charger_config, error_callback=self._log_error)
                 self.ev_logic = EVChargingLogic(self.ev_charger, auto_default_phases=ev_charger_config.auto_default_phases)
             else:
+                if self._evse_offline:
+                    self._evse_offline = False
+                    self._update_evse_offline_display()
                 return
+
+        charger_state = self.ev_charger.get_state() if self.ev_charger else None
+        is_offline = (
+            ui_settings["enabled"]
+            and bool(ev_charger_config.device_id)
+            and (charger_state is None or not charger_state.is_connected)
+        )
+        if is_offline != self._evse_offline:
+            self._evse_offline = is_offline
+            self._update_evse_offline_display()
+
         sunset_settings = self.sunset_panel.get_settings()
 
         settings = EVSettings(

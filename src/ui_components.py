@@ -3,7 +3,7 @@ UI Components for Deye Inverter EMS application.
 """
 
 import customtkinter as ctk
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Optional
 
 from src.config import protection_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot
 
@@ -1492,11 +1492,14 @@ class SunsetChargingPanel(ctk.CTkFrame):
     
     def update_state(self, sunset_str: str, hours_left: float, required_amps: int, active: bool,
                       cloud_boost: float = 1.0, weather_str: str = "", sparkline: str = "",
-                      selling_first_paused: bool = False) -> None:
+                      selling_first_paused: bool = False,
+                      status_override: Optional[str] = None) -> None:
         """Update the state display labels."""
         self.lbl_sunset_time.configure(text=f"Sunset: {sunset_str}")
         
-        if hours_left is not None and hours_left > 0:
+        if status_override:
+            self.lbl_time_remaining.configure(text=status_override, text_color="#95A5A6")
+        elif hours_left is not None and hours_left > 0:
             h = int(hours_left)
             m = int((hours_left - h) * 60)
             self.lbl_time_remaining.configure(
