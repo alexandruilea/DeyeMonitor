@@ -1783,6 +1783,8 @@ class EVChargerPanel(ctk.CTkFrame):
 
             min_1p = int(self.min_amps_1p.get())
             min_3p = int(self.min_amps_3p.get())
+            raw_amp_steps = [int(x.strip()) for x in self.amp_steps.get().split(",") if x.strip().isdigit()]
+            amp_steps = tuple(raw_amp_steps) if raw_amp_steps else ev_charger_config.solar_amp_steps
 
             return {
                 "enabled": self.enabled_var.get(),
@@ -1798,7 +1800,7 @@ class EVChargerPanel(ctk.CTkFrame):
                 "grid_charge": self.grid_charge_var.get(),
                 "grid_charge_amps": int(self.grid_charge_amps.get()),
                 "solar_ramp_down_delay": int(self.ramp_down_delay.get()),
-                "solar_amp_steps": tuple(int(x.strip()) for x in self.amp_steps.get().split(",")),
+                "solar_amp_steps": amp_steps,
                 "ev_first": self.ev_first_var.get(),
                 "boost": self.boost_var.get(),
                 "phases": phases,
@@ -1806,7 +1808,7 @@ class EVChargerPanel(ctk.CTkFrame):
             }
         except (ValueError, TypeError):
             return {
-                "enabled": False,
+                "enabled": self.enabled_var.get(),
                 "min_amps": ev_charger_config.min_amps_1p,
                 "min_amps_1p": ev_charger_config.min_amps_1p,
                 "min_amps_3p": ev_charger_config.min_amps_3p,

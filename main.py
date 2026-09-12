@@ -875,11 +875,10 @@ class DeyeApp(ctk.CTk):
                 self._evse_offline = False
                 self._update_evse_offline_display()
         else:
-            if self.ev_charger is not None:
-                is_offline = not self.ev_charger.get_state().is_connected
-                if is_offline != self._evse_offline:
-                    self._evse_offline = is_offline
-                    self._update_evse_offline_display()
+            is_offline = self._is_ev_offline()
+            if is_offline != self._evse_offline:
+                self._evse_offline = is_offline
+                self._update_evse_offline_display()
 
 
 
@@ -1799,7 +1798,19 @@ class DeyeApp(ctk.CTk):
             text = "Sell: OFF"
             color = "#E74C3C"  # red
         self.after(0, lambda t=text, c=color: self.lbl_solar_sell.configure(text=t, text_color=c))
+        if hasattr(self, "_is_ev_offline") and getattr(self, "ev_panel", None) is not None:
+            self._evse_offline = self._is_ev_offline()
         self._update_evse_offline_display()
+
+    def _is_ev_offline(self) -> bool:
+        """Check if EV charger is enabled and configured but currently offline."""
+        if not getattr(self, "ev_panel", None) or not self.ev_panel.is_enabled():
+            return False
+        if not getattr(ev_charger_config, "device_id", None):
+            return False
+        if getattr(self, "ev_charger", None) is None:
+            return True
+        return not self.ev_charger.get_state().is_connected
 
     def _update_evse_offline_display(self) -> None:
         """Update the EVSE offline status label in the top stats row."""
@@ -1821,12 +1832,7 @@ class DeyeApp(ctk.CTk):
                     self._update_evse_offline_display()
                 return
 
-        charger_state = self.ev_charger.get_state() if self.ev_charger else None
-        is_offline = (
-            ui_settings["enabled"]
-            and bool(ev_charger_config.device_id)
-            and (charger_state is None or not charger_state.is_connected)
-        )
+        is_offline = self._is_ev_offline()
         if is_offline != self._evse_offline:
             self._evse_offline = is_offline
             self._update_evse_offline_display()
@@ -2002,6 +2008,12 @@ class DeyeApp(ctk.CTk):
         
         # Update total load consumption per phase display
         self.lbl_load_consumption.configure(text=f"L1: {data.total_loads[0]}W L2: {data.total_loads[1]}W L3: {data.total_loads[2]}W")
+
+        # Update EVSE offline status display
+        is_ev_offline = self._is_ev_offline()
+        if is_ev_offline != self._evse_offline:
+            self._evse_offline = is_ev_offline
+            self._update_evse_offline_display()
         
         # Update outlet buttons
         outlets = self.tapo.get_all_outlets()
