@@ -283,6 +283,7 @@ class TestEVSEOfflineStatus(unittest.TestCase):
         self.app._update_sell_label = DeyeApp._update_sell_label.__get__(self.app, DeyeApp)
         self.app._update_evse_offline_display = DeyeApp._update_evse_offline_display.__get__(self.app, DeyeApp)
         self.app._on_ev_change = DeyeApp._on_ev_change.__get__(self.app, DeyeApp)
+        self.app._is_ev_offline = DeyeApp._is_ev_offline.__get__(self.app, DeyeApp)
 
     def test_evse_offline_label_updates_display(self):
         """When EVSE is offline, label displays ' - EVSE: Offline'."""
@@ -311,6 +312,21 @@ class TestEVSEOfflineStatus(unittest.TestCase):
         self.app._on_ev_change()
         self.assertFalse(self.app._evse_offline)
         self.app.lbl_evse_offline.configure.assert_called_with(text="")
+
+    def test_is_ev_offline_detection(self):
+        """Check _is_ev_offline returns correct status based on panel and charger state."""
+        self.app.ev_panel = MagicMock()
+        self.app.ev_panel.is_enabled.return_value = True
+        self.app.ev_charger = MagicMock()
+        self.app.ev_charger.get_state.return_value.is_connected = False
+
+        self.assertTrue(self.app._is_ev_offline())
+
+        self.app.ev_charger.get_state.return_value.is_connected = True
+        self.assertFalse(self.app._is_ev_offline())
+
+        self.app.ev_panel.is_enabled.return_value = False
+        self.assertFalse(self.app._is_ev_offline())
 
 
 if __name__ == "__main__":

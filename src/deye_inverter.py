@@ -210,6 +210,61 @@ class DeyeInverter:
             print(f"[READ] Failed to read max sell power: {e}")
             return None
 
+    def read_time_of_use_slots(self) -> Optional[List[dict]]:
+        """
+        Read the 6 Time of Use time points and target SOCs from the inverter.
+        Registers 148-153: Time points (e.g. 700 = 07:00, 2359 = 23:59)
+        Registers 166-171: Target capacity/SOC (0-100%)
+        
+        Returns:
+            List of 6 dicts with keys: 'slot_idx' (0-5), 'end_time' (raw int),
+            'end_hour', 'end_min', 'target_soc', 'soc_register' (166-171),
+            or None if read failed.
+        """
+        try:
+            if not self._connect():
+                return None
+            time_points = self._modbus.read_holding_registers(148, 6)
+            soc_targets = self._modbus.read_holding_registers(166, 6)
+            if not time_points or not soc_targets:
+                return None
+            
+            slots = []
+            for i in range(6):
+                raw_time = time_points[i]
+                hour = raw_time // 100
+                minute = raw_time % 100
+                soc = soc_targets[i]
+                slots.append({
+                    "slot_idx": i,
+                    "end_time": raw_time,
+                    "end_hour": hour,
+                    "end_min": minute,
+                    "target_soc": soc,
+                    "soc_register": 166 + i,
+                })
+            return slots
+        except Exception as e:
+            print(f"[READ] Failed to read TOU slots: {e}")
+            return None
+
+    def set_time_of_use_target_soc(self, slot_idx: int, target_soc: int) -> bool:
+        """
+        Set the target SOC (%) for a specific Time of Use slot (0 to 5, reg 166-171).
+        
+        Args:
+            slot_idx: 0 to 5 corresponding to slots 1-6 (registers 166-171)
+            target_soc: Target SOC in percent (0 to 100)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not (0 <= slot_idx <= 5):
+            return False
+        target_soc = max(0, min(100, target_soc))
+        register = 166 + slot_idx
+        return self._write_register(register, target_soc)
+
     def read_bms_data(self) -> Optional[BMSData]:
         """
         Read complete BMS data including per-pack information.

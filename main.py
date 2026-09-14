@@ -9,6 +9,7 @@ import threading
 import sys
 import os
 from datetime import datetime
+from typing import Optional
 import customtkinter as ctk
 
 from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, get_app_path
@@ -29,6 +30,7 @@ from src.ui_components import (
     OutletSettingsPanel,
     ErrorLogViewer,
     TimeSchedulePanel,
+    ChargePrioritizationPanel,
     OverpowerProtectionPanel,
     SunsetChargingPanel,
     EVChargerPanel,
@@ -155,6 +157,14 @@ class DeyeApp(ctk.CTk):
         self._export_leak_debounce_sec = 300  # 5-minute debounce for both transitions
         self._pv_samples: list[tuple[float, int]] = []  # (timestamp, pv_watts) rolling 60-min window
         self._cloud_boost_factor = 1.0  # Current cloudy day boost multiplier
+
+        # Charge prioritization state (Time of Use target SOC)
+        self._prioritization_boosted = False  # Whether target SOC is currently raised to boost_target_soc
+        self._prioritization_grid_pull_since: float | None = None  # When grid pull continuously exceeded threshold
+        self._tou_slots_cache: list[dict] | None = None  # Cached TOU slots from inverter
+        self._last_tou_read_time: float = 0.0  # Last time TOU slots were read from inverter
+        self._last_tou_target_soc: int | None = None  # Track last written target SOC to avoid redundant writes
+        self._last_prioritization_slot_idx: int | None = None  # Last active TOU slot index (0-5)
         
         # Weather forecast for predictive sunset charging
         from src.config import sunset_config
@@ -297,34 +307,41 @@ class DeyeApp(ctk.CTk):
             on_schedule_change=self._on_schedule_change
         )
         self.schedule_panel.grid(row=6, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+
+        # Charge Prioritization Panel (TOU target SOC adjustment)
+        self.prioritization_panel = ChargePrioritizationPanel(
+            self.scrollable,
+            on_settings_change=self._on_prioritization_change
+        )
+        self.prioritization_panel.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
         # Overpower Protection Panel
         self.protection_panel = OverpowerProtectionPanel(
             self.scrollable,
             on_settings_change=self._on_protection_change
         )
-        self.protection_panel.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        self.protection_panel.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
         # Sunset Charging Panel
         self.sunset_panel = SunsetChargingPanel(
             self.scrollable,
             on_settings_change=self._on_sunset_change
         )
-        self.sunset_panel.grid(row=8, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        self.sunset_panel.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
         # Tuya Heat Pump Panel
         self.heatpump_panel = HeatpumpPanel(
             self.scrollable,
             on_settings_change=self._on_heatpump_change
         )
-        self.heatpump_panel.grid(row=9, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        self.heatpump_panel.grid(row=10, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
 
         # EV Charger Panel
         self.ev_panel = EVChargerPanel(
             self.scrollable,
             on_settings_change=self._on_ev_change
         )
-        self.ev_panel.grid(row=10, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        self.ev_panel.grid(row=11, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
         # Track last applied schedule to avoid redundant writes
         self._last_applied_schedule = None
@@ -344,14 +361,14 @@ class DeyeApp(ctk.CTk):
             self.cfg,
             on_manual_toggle=self._on_manual_toggle
         )
-        self.settings.grid(row=11, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+        self.settings.grid(row=12, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
         
-        current_row = 13
+        current_row = 14
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -840,6 +857,22 @@ class DeyeApp(ctk.CTk):
         self.after(0, lambda: self.lbl_charge_settings.configure(
             text=f"Charge Limits: Max: {max_str} | Grid: {grid_str} | Discharge: {discharge_str}"
         ))
+
+    def _on_prioritization_change(self) -> None:
+        """Handle charge prioritization settings change."""
+        if not self.prioritization_panel.is_enabled():
+            print("[PRIORITIZATION] Disabled via UI")
+            self._prioritization_grid_pull_since = None
+            if self._prioritization_boosted:
+                # Fallback to normal target SOC on active slot if boosted
+                settings = self.prioritization_panel.get_settings()
+                normal_target = settings["normal_target_soc"]
+                if self._last_prioritization_slot_idx is not None:
+                    if self.inverter.set_time_of_use_target_soc(self._last_prioritization_slot_idx, normal_target):
+                        self._last_tou_target_soc = normal_target
+                        print(f"[PRIORITIZATION] Restored normal target {normal_target}% on slot {self._last_prioritization_slot_idx + 1}")
+                self._prioritization_boosted = False
+            self.after(0, lambda: self.prioritization_panel.update_status(False, self._last_prioritization_slot_idx, self._last_tou_target_soc))
 
     def _on_protection_change(self) -> None:
         """Handle protection settings change."""
@@ -1802,6 +1835,161 @@ class DeyeApp(ctk.CTk):
             self._evse_offline = self._is_ev_offline()
         self._update_evse_offline_display()
 
+    def _get_current_tou_slot_index(self, now_time=None) -> Optional[int]:
+        """
+        Determine the active Time of Use slot index (0-5) by reading inverter TOU registers 148-153.
+        Caches the TOU slot table to avoid reading on every cycle.
+        
+        Mapping:
+        Slot 0 (Time 1): starts at reg 148 (01:00), ends at reg 149 (07:00) -> Target SOC reg 166
+        Slot 1 (Time 2): starts at reg 149 (07:00), ends at reg 150 (11:30) -> Target SOC reg 167
+        Slot 2 (Time 3): starts at reg 150 (11:30), ends at reg 151 (16:00) -> Target SOC reg 168
+        Slot 3 (Time 4): starts at reg 151 (16:00), ends at reg 152 (20:00) -> Target SOC reg 169
+        Slot 4 (Time 5): starts at reg 152 (20:00), ends at reg 153 (23:00) -> Target SOC reg 170
+        Slot 5 (Time 6): starts at reg 153 (23:00), ends at reg 148 (01:00) -> Target SOC reg 171
+        """
+        import datetime
+        now = now_time or datetime.datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+        current_time_ts = time.time()
+
+        # Refresh cache every 60 seconds
+        if self._tou_slots_cache is None or (current_time_ts - self._last_tou_read_time) > 60:
+            slots = self.inverter.read_time_of_use_slots()
+            if slots and len(slots) == 6:
+                self._tou_slots_cache = slots
+                self._last_tou_read_time = current_time_ts
+
+        if not self._tou_slots_cache:
+            return None
+
+        # Build start and end minutes for each slot
+        # Slot i starts at slots[i] time point and ends at slots[(i+1)%6] time point
+        num_slots = len(self._tou_slots_cache)
+        for i in range(num_slots):
+            curr_slot = self._tou_slots_cache[i]
+            next_slot = self._tou_slots_cache[(i + 1) % num_slots]
+            start_min = curr_slot["end_hour"] * 60 + curr_slot["end_min"]
+            end_min = next_slot["end_hour"] * 60 + next_slot["end_min"]
+
+            if start_min <= end_min:
+                if start_min <= current_minutes < end_min:
+                    return i
+            else:
+                # Overnight transition (e.g. 23:00 to 01:00)
+                if current_minutes >= start_min or current_minutes < end_min:
+                    return i
+
+        return None
+
+    def _process_charge_prioritization(self, data: InverterData) -> None:
+        """
+        Prioritise charging over selling when other algorithms request heavy charging.
+        
+        Trigger condition to boost:
+        - Prioritization panel enabled
+        - Inverter has power to sell (grid_power < -sell_trigger_power, e.g. exporting > 1000W)
+        - Boost algorithms say it should be charging heavily:
+          (_protection_active and _protection_boost_amps > 0) OR (_sunset_active and _sunset_boost_amps > 0)
+        
+        Action when boosting:
+        - Determine current TOU interval index (0-5) from inverter registers 148-153
+        - Raise that interval's target SOC (register 166-171) to boost_target_soc (e.g. 90%)
+        
+        Condition to fallback:
+        - Pulling heavily from grid (grid_power > grid_pull_threshold_w, e.g. > 500W) for > grid_pull_duration_sec (e.g. 300s)
+        - Lower target SOC back to normal_target_soc (e.g. 20%)
+        """
+        if not getattr(self, "prioritization_panel", None) or not self.prioritization_panel.is_enabled():
+            return
+
+        settings = self.prioritization_panel.get_settings()
+        boost_target = settings["boost_target_soc"]
+        normal_target = settings["normal_target_soc"]
+        sell_trigger_w = settings["sell_trigger_power"]
+        grid_pull_threshold_w = settings["grid_pull_threshold_w"]
+        grid_pull_duration_sec = settings["grid_pull_duration_sec"]
+
+        slot_idx = self._get_current_tou_slot_index()
+        if slot_idx is None:
+            return
+
+        # If active slot changed, update tracking and restore previous slot if it was boosted
+        if self._last_prioritization_slot_idx is not None and self._last_prioritization_slot_idx != slot_idx:
+            prev_slot = self._last_prioritization_slot_idx
+            print(f"[PRIORITIZATION] Slot transitioned from {prev_slot + 1} to {slot_idx + 1}")
+            if self._prioritization_boosted:
+                reg = 166 + prev_slot
+                print(f"[PRIORITIZATION] Restoring previous slot {prev_slot + 1} (reg {reg}) target SOC to {normal_target}%")
+                if self.inverter.set_time_of_use_target_soc(prev_slot, normal_target):
+                    self._log_error(f"Charge Prioritization: Restored Slot {prev_slot + 1} target SOC to {normal_target}%")
+            # Reset state for the new slot
+            self._prioritization_boosted = False
+            self._prioritization_grid_pull_since = None
+
+        self._last_prioritization_slot_idx = slot_idx
+
+        # Check heavy charging request from other algorithms
+        heavy_charging_requested = (
+            (getattr(self, "_protection_active", False) and getattr(self, "_protection_boost_amps", 0) > 0)
+            or (getattr(self, "_sunset_active", False) and getattr(self, "_sunset_boost_amps", 0) > 0)
+        )
+
+        # Check if inverter has power to sell (exporting beyond trigger power)
+        has_power_to_sell = data.grid_power < -sell_trigger_w
+
+        # Check heavy grid pull (drawing power from grid)
+        is_pulling_from_grid = data.grid_power > grid_pull_threshold_w
+        now_ts = time.time()
+
+        pull_timer_sec = None
+        if is_pulling_from_grid:
+            if self._prioritization_grid_pull_since is None:
+                self._prioritization_grid_pull_since = now_ts
+            pull_duration = now_ts - self._prioritization_grid_pull_since
+            pull_timer_sec = int(pull_duration)
+        else:
+            self._prioritization_grid_pull_since = None
+
+        # State machine: Boost or Fallback
+        if not self._prioritization_boosted:
+            if has_power_to_sell and heavy_charging_requested:
+                # Trigger boost: raise target SOC to boost_target
+                reg = 166 + slot_idx
+                print(f"[PRIORITIZATION] Raising TOU slot {slot_idx + 1} (reg {reg}) target SOC to {boost_target}% "
+                      f"(exporting {-data.grid_power}W > {sell_trigger_w}W, heavy charging requested: "
+                      f"prot={self._protection_boost_amps}A, sunset={self._sunset_boost_amps}A)")
+                if self.inverter.set_time_of_use_target_soc(slot_idx, boost_target):
+                    self._prioritization_boosted = True
+                    self._last_tou_target_soc = boost_target
+                    self._log_error(f"Charge Prioritization: Raised Slot {slot_idx + 1} target SOC to {boost_target}%")
+        else:
+            # Currently boosted: check if we should fall back
+            should_fallback = False
+            fallback_reason = ""
+            if self._prioritization_grid_pull_since is not None:
+                pull_duration = now_ts - self._prioritization_grid_pull_since
+                if pull_duration >= grid_pull_duration_sec:
+                    should_fallback = True
+                    fallback_reason = f"Grid pull > {grid_pull_threshold_w}W for {int(pull_duration)}s"
+
+            if should_fallback:
+                reg = 166 + slot_idx
+                print(f"[PRIORITIZATION] Lowering TOU slot {slot_idx + 1} (reg {reg}) target SOC to {normal_target}% ({fallback_reason})")
+                if self.inverter.set_time_of_use_target_soc(slot_idx, normal_target):
+                    self._prioritization_boosted = False
+                    self._last_tou_target_soc = normal_target
+                    self._prioritization_grid_pull_since = None
+                    self._log_error(f"Charge Prioritization: Lowered Slot {slot_idx + 1} target SOC to {normal_target}% ({fallback_reason})")
+
+        # Update UI status
+        current_target = self._last_tou_target_soc
+        if current_target is None and self._tou_slots_cache and slot_idx < len(self._tou_slots_cache):
+            current_target = self._tou_slots_cache[slot_idx].get("target_soc")
+
+        self.after(0, lambda b=self._prioritization_boosted, s=slot_idx, t=current_target, p=pull_timer_sec:
+                   self.prioritization_panel.update_status(b, s, t, p))
+
     def _is_ev_offline(self) -> bool:
         """Check if EV charger is enabled and configured but currently offline."""
         if not getattr(self, "ev_panel", None) or not self.ev_panel.is_enabled():
@@ -1971,6 +2159,8 @@ class DeyeApp(ctk.CTk):
                     self._process_overpower_protection(data)
                     # Process sunset charging (may further boost if needed to reach target by sunset)
                     self._process_sunset_charging(data)
+                    # Prioritise charging over selling when heavy charging is requested
+                    self._process_charge_prioritization(data)
                     # Anti-export: force zero-export if inverter leaks to grid despite high charge setting
                     self._process_export_leak_protection(data)
                     # Process Tuya heat pump logic
@@ -2169,6 +2359,12 @@ class DeyeApp(ctk.CTk):
     def destroy(self) -> None:
         """Clean up resources on window close."""
         self._running = False
+        if getattr(self, "_prioritization_boosted", False) and self._last_prioritization_slot_idx is not None:
+            try:
+                settings = self.prioritization_panel.get_settings()
+                self.inverter.set_time_of_use_target_soc(self._last_prioritization_slot_idx, settings["normal_target_soc"])
+            except Exception:
+                pass
         if self.hp_manager:
             self.hp_manager.stop()
         if self.ev_charger:

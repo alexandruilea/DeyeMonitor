@@ -5,7 +5,7 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable, Optional
 
-from src.config import protection_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot
+from src.config import protection_config, charge_prioritization_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -940,6 +940,201 @@ class TimeSchedulePanel(ctk.CTkFrame):
             )
         else:
             self.lbl_status.configure(text="No active slot (using defaults)", text_color="#F39C12")
+
+
+class ChargePrioritizationPanel(ctk.CTkFrame):
+    """
+    Panel for configuring charge prioritization via Time of Use target SOC.
+    
+    When the inverter is selling power while boost algorithms (battery boost protection
+    or sunset charging) require heavy charging, this feature raises the current TOU
+    interval's charge target to prioritize battery charging.
+    If solar is lost and the system pulls > 500W from the grid for sustained time,
+    it lowers the target back down.
+    """
+    
+    def __init__(self, parent, on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
+        self.on_settings_change = on_settings_change
+        
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(
+            header_frame, text="⚡ CHARGE PRIORITIZATION (TOU TARGET)",
+            font=("Roboto", 14, "bold"),
+            text_color="#3498DB"
+        ).grid(row=0, column=0, sticky="w")
+        
+        # Enable/Disable switch
+        self.enabled_var = ctk.BooleanVar(value=charge_prioritization_config.enabled)
+        self.enable_switch = ctk.CTkSwitch(
+            header_frame, text="Enable Prioritization",
+            variable=self.enabled_var,
+            font=("Roboto", 11, "bold"),
+            command=self._on_enable_toggle
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        if charge_prioritization_config.enabled:
+            self.enable_switch.select()
+        
+        # Status label
+        _startup_enabled = charge_prioritization_config.enabled
+        self.lbl_status = ctk.CTkLabel(
+            header_frame, text="Active (Standby)" if _startup_enabled else "Disabled",
+            font=("Roboto", 11),
+            text_color="#2ECC71" if _startup_enabled else "gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+        
+        # Settings container
+        settings_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        settings_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        settings_frame.grid_columnconfigure((1, 3, 5, 7, 9), weight=1)
+        
+        # Boost Target SOC (%)
+        ctk.CTkLabel(
+            settings_frame, text="Boost Target:",
+            font=("Roboto", 10, "bold"),
+            text_color="#2ECC71"
+        ).grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
+        
+        self.boost_target = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.boost_target.grid(row=0, column=1, padx=5, pady=8)
+        self.boost_target.insert(0, str(charge_prioritization_config.boost_target_soc))
+        self.boost_target.bind("<FocusOut>", self._on_field_change)
+        
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 10), pady=8)
+        
+        # Fallback / Normal Target SOC (%)
+        ctk.CTkLabel(
+            settings_frame, text="Fallback Target:",
+            font=("Roboto", 10),
+            text_color="#E67E22"
+        ).grid(row=0, column=3, padx=5, pady=8, sticky="w")
+        
+        self.normal_target = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.normal_target.grid(row=0, column=4, padx=5, pady=8)
+        self.normal_target.insert(0, str(charge_prioritization_config.normal_target_soc))
+        self.normal_target.bind("<FocusOut>", self._on_field_change)
+        
+        ctk.CTkLabel(settings_frame, text="%", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 10), pady=8)
+        
+        # Sell Trigger Power (W)
+        ctk.CTkLabel(
+            settings_frame, text="Sell Trigger:",
+            font=("Roboto", 10),
+            text_color="#3498DB"
+        ).grid(row=0, column=6, padx=5, pady=8, sticky="w")
+        
+        self.sell_trigger = ctk.CTkEntry(settings_frame, width=60, justify="center")
+        self.sell_trigger.grid(row=0, column=7, padx=5, pady=8)
+        self.sell_trigger.insert(0, str(charge_prioritization_config.sell_trigger_power))
+        self.sell_trigger.bind("<FocusOut>", self._on_field_change)
+        
+        ctk.CTkLabel(settings_frame, text="W", font=("Roboto", 10)).grid(row=0, column=8, padx=(0, 10), pady=8)
+        
+        # Grid Pull Threshold (W)
+        ctk.CTkLabel(
+            settings_frame, text="Grid Pull:",
+            font=("Roboto", 10),
+            text_color="#E74C3C"
+        ).grid(row=0, column=9, padx=5, pady=8, sticky="w")
+        
+        self.grid_pull = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.grid_pull.grid(row=0, column=10, padx=5, pady=8)
+        self.grid_pull.insert(0, str(charge_prioritization_config.grid_pull_threshold_w))
+        self.grid_pull.bind("<FocusOut>", self._on_field_change)
+        
+        ctk.CTkLabel(settings_frame, text="W", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 10), pady=8)
+
+        # Grid Pull Duration (s)
+        ctk.CTkLabel(
+            settings_frame, text="Pull Duration:",
+            font=("Roboto", 10),
+            text_color="#95A5A6"
+        ).grid(row=0, column=12, padx=5, pady=8, sticky="w")
+        
+        self.pull_duration = ctk.CTkEntry(settings_frame, width=50, justify="center")
+        self.pull_duration.grid(row=0, column=13, padx=5, pady=8)
+        self.pull_duration.insert(0, str(charge_prioritization_config.grid_pull_duration_sec))
+        self.pull_duration.bind("<FocusOut>", self._on_field_change)
+        
+        ctk.CTkLabel(settings_frame, text="s", font=("Roboto", 10)).grid(row=0, column=14, padx=(0, 10), pady=8)
+
+    def _on_enable_toggle(self) -> None:
+        """Handle enable/disable switch toggle."""
+        if self.enabled_var.get():
+            self.lbl_status.configure(text="Active (Standby)", text_color="#2ECC71")
+        else:
+            self.lbl_status.configure(text="Disabled", text_color="gray")
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    def _on_field_change(self, event=None) -> None:
+        """Handle setting field edit."""
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    def is_enabled(self) -> bool:
+        """Check if charge prioritization is enabled."""
+        return self.enabled_var.get()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Programmatically set enable switch."""
+        self.enabled_var.set(enabled)
+        if enabled:
+            self.enable_switch.select()
+            self.lbl_status.configure(text="Active (Standby)", text_color="#2ECC71")
+        else:
+            self.enable_switch.deselect()
+            self.lbl_status.configure(text="Disabled", text_color="gray")
+
+    def get_settings(self) -> dict:
+        """Get current settings from UI entries."""
+        try:
+            return {
+                "enabled": self.enabled_var.get(),
+                "boost_target_soc": int(self.boost_target.get()),
+                "normal_target_soc": int(self.normal_target.get()),
+                "sell_trigger_power": int(self.sell_trigger.get()),
+                "grid_pull_threshold_w": int(self.grid_pull.get()),
+                "grid_pull_duration_sec": int(self.pull_duration.get()),
+            }
+        except ValueError:
+            return {
+                "enabled": self.enabled_var.get(),
+                "boost_target_soc": charge_prioritization_config.boost_target_soc,
+                "normal_target_soc": charge_prioritization_config.normal_target_soc,
+                "sell_trigger_power": charge_prioritization_config.sell_trigger_power,
+                "grid_pull_threshold_w": charge_prioritization_config.grid_pull_threshold_w,
+                "grid_pull_duration_sec": charge_prioritization_config.grid_pull_duration_sec,
+            }
+
+    def update_status(self, is_boosting: bool, slot_idx: Optional[int] = None, current_target: Optional[int] = None, pull_timer_sec: Optional[int] = None) -> None:
+        """Update status label with current prioritization state."""
+        if not self.enabled_var.get():
+            self.lbl_status.configure(text="Disabled", text_color="gray")
+            return
+        
+        slot_str = f"Slot {slot_idx + 1}" if slot_idx is not None else "No slot"
+        target_str = f"Target {current_target}%" if current_target is not None else ""
+        
+        if is_boosting:
+            pull_str = f" (Grid Pull {pull_timer_sec}s)" if pull_timer_sec else ""
+            self.lbl_status.configure(
+                text=f"BOOSTING: {slot_str} \u2192 {target_str}{pull_str}",
+                text_color="#2ECC71"
+            )
+        else:
+            self.lbl_status.configure(
+                text=f"Standby: {slot_str} ({target_str})",
+                text_color="#3498DB"
+            )
 
 
 class OverpowerProtectionPanel(ctk.CTkFrame):
