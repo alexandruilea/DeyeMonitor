@@ -1,5 +1,6 @@
 # Environment files
 .env
+.env.saved
 
 # Python
 __pycache__/

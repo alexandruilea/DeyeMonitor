@@ -29,7 +29,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Cloudy day compensation (reactive fallback when no forecast): compares 15-min rolling PV average against expected cos² curve; boosts charging when production drops below threshold
   - Graceful fallback: if API is unreachable, reverts to the reactive cos² algorithm automatically
   - Configurable target SOC, buffer time, and battery capacity
-  - 10A step rounding and throttled writes to avoid excessive register writes
+  - Configurable amp-step rounding (with hysteresis) and throttled writes to avoid excessive register writes
   - Automatically coordinates with battery boost protection (protection yields when sunset charging is active)
   - **Restart persistence** — on app start, the inverter's current max-charge value is preserved as a sunset boost (when sunset is enabled) so charging speed doesn't reset; falls back to protection-boost attribution when sunset is off
   - **Startup gate** — defers writing the schedule's default max_charge to the inverter until the weather forecast has either loaded or definitively failed, preventing a brief window of "wrong" charge speed at restart
@@ -204,6 +204,7 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 | `SUNSET_TARGET_SOC`            | Target SOC to reach by sunset (%)                                     | 100     |
 | `SUNSET_BUFFER_MINUTES`        | Finish charging this many minutes before sunset                       | 60      |
 | `SUNSET_MIN_CHARGE_AMPS`       | Minimum charge rate when sunset charging is active                    | 10      |
+| `SUNSET_AMP_STEP`              | Sunset boost is rounded up to multiples of this (A); steps down only after dropping half a step below the lower one. Larger = fewer inverter writes | 10      |
 | `SUNSET_PEAK_SOLAR_HOUR`       | Peak solar production hour in local time (e.g. 13.5); 0 = auto (noon) | 0       |
 | `SUNSET_PEAK_EXPECTED_KW`      | Peak clear-sky PV output in kW (e.g. 14); 0 = no cloudy compensation  | 0       |
 | `SUNSET_CLOUD_THRESHOLD_PCT`   | Below this % of expected PV → apply cloudy boost                      | 60      |
@@ -393,6 +394,19 @@ HEATPUMP_SCHEDULE_3=18:00-06:00,28,35       # Evening/night: maintain 28-35°C
 | LV Recovery V    | Voltage required for LV recovery                                               | 220V    |
 | Recovery Delay s | Seconds voltage must stay above recovery threshold                             | 300s    |
 | Schedule slots   | Time intervals with min/max temperature ranges                                 | —       |
+
+### Saving in-app settings
+
+Settings changed in the app are lost on restart because the app always starts from `.env`. To keep them, click **💾 Save current settings to .env.saved** at the bottom of the window. This writes `.env.saved` next to `.env`, using your `.env` as the template:
+
+- Only the settings shown in the app are updated. Comments, ordering and hardware settings (IPs, keys, passwords, registers) are kept as they are.
+- Settings not yet in `.env` are added at the end.
+- Charge and heat pump schedule rows are renumbered. Rows you've disabled are kept as `# DISABLED ...` comments, so they won't load after a restart.
+- Nothing is saved if any field holds an invalid value; the message under the button says which section.
+
+`.env` itself is never overwritten. When you want to keep the saved settings, replace `.env` with `.env.saved` yourself and restart the app. `.env.saved` contains the same secrets as `.env` and is git-ignored.
+
+Global safety values (Max Phase W, Max UPS Total, Critical LV) and runtime toggles (manual mode, the schedule's Enable switch, EV/heat pump boost, EV grid charge) have no `.env` setting and aren't saved. Battery Boost Protection's Max Sell Power isn't saved either: the app overwrites it at runtime with the inverter's register value and the active schedule slot's sell power.
 
 ## Usage
 

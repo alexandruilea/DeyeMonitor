@@ -230,7 +230,10 @@ class TuyaChargerManager:
                     self._connect()
 
                 if self._device is None:
-                    time.sleep(min(2 ** self._retry_count, 60))
+                    # Gentle backoff (15s, 30s, 60s ... 5 min): each attempt costs the
+                    # charger a TCP + session-key handshake, and handshake bursts are what
+                    # tends to wedge its WiFi module's LAN service.
+                    time.sleep(min(15 * 2 ** max(self._retry_count - 1, 0), 300))
                     continue
 
                 # Poll status
@@ -260,9 +263,11 @@ class TuyaChargerManager:
     def _connect(self) -> None:
         """Create a tinytuya device connection, auto-probing protocol version on JSON errors."""
         configured = self.config.protocol_version
-        # After repeated "Invalid JSON" errors the configured version is likely wrong.
-        # Try v3.4 and v3.5 as alternatives (Feyree devices ship with varying firmware).
-        if self._json_error_streak >= 2:
+        # After repeated "Invalid JSON" errors the configured version may be wrong, so try
+        # the alternatives (Feyree devices ship with varying firmware). Only probe while no
+        # version has ever worked: once one has, these errors mean the device stopped
+        # answering the handshake, and probing just hammers it with extra handshakes.
+        if self._json_error_streak >= 2 and self._working_version is None:
             alts = [v for v in (3.4, 3.5, 3.3) if v != configured]
             versions_to_try = [configured] + alts
         else:
@@ -279,6 +284,8 @@ class TuyaChargerManager:
                 )
                 dev.set_socketPersistent(False)  # Non-persistent: fresh TCP per poll
                 dev.set_socketTimeout(5)
+                # tinytuya defaults to 5 connect/recv retries per call; our loop already backs off.
+                dev.set_socketRetryLimit(1)
                 status = dev.status()
                 if "Error" in status:
                     raise ConnectionError(status["Error"])
@@ -408,30 +415,36 @@ class TuyaChargerManager:
         amps_dp = str(self.config.dp_amps)
         desc_parts = []
 
-        if pending_amps is not None:
-            desired_amps = pending_amps
-            scaled = desired_amps * self.config.dp_amps_scale
-            if desired_amps != self.state.current_amps:
-                # When lowering amps while on: OFF → set → ON to avoid
-                # overcurrent from the car still drawing the old rate.
-                lowering = desired_amps < self.state.current_amps
-                if lowering and self.state.is_on:
-                    self._device.set_value(switch_dp, False)
-                    time.sleep(5)
-                self._device.set_value(amps_dp, scaled)
-                if lowering and self.state.is_on:
-                    time.sleep(5)
-                    self._device.set_value(switch_dp, True)
-                desc_parts.append(f"{desired_amps}A")
-                self.state.current_amps = desired_amps
-                self._write_grace_until = time.time() + 30
+        # Reuse one TCP session for the whole command sequence instead of a new
+        # connection + handshake per set_value (up to 3 within ~10s when lowering amps).
+        self._device.set_socketPersistent(True)
+        try:
+            if pending_amps is not None:
+                desired_amps = pending_amps
+                scaled = desired_amps * self.config.dp_amps_scale
+                if desired_amps != self.state.current_amps:
+                    # When lowering amps while on: OFF → set → ON to avoid
+                    # overcurrent from the car still drawing the old rate.
+                    lowering = desired_amps < self.state.current_amps
+                    if lowering and self.state.is_on:
+                        self._device.set_value(switch_dp, False)
+                        time.sleep(5)
+                    self._device.set_value(amps_dp, scaled)
+                    if lowering and self.state.is_on:
+                        time.sleep(5)
+                        self._device.set_value(switch_dp, True)
+                    desc_parts.append(f"{desired_amps}A")
+                    self.state.current_amps = desired_amps
+                    self._write_grace_until = time.time() + 30
 
-        if pending_on_off is not None:
-            desired_on = pending_on_off
-            if desired_on != self.state.is_on:
-                self._device.set_value(switch_dp, desired_on)
-                desc_parts.append("ON" if desired_on else "OFF")
-                self.state.is_on = desired_on
+            if pending_on_off is not None:
+                desired_on = pending_on_off
+                if desired_on != self.state.is_on:
+                    self._device.set_value(switch_dp, desired_on)
+                    desc_parts.append("ON" if desired_on else "OFF")
+                    self.state.is_on = desired_on
+        finally:
+            self._device.set_socketPersistent(False)  # Closes the session
 
         if not desc_parts:
             return  # Values already match

@@ -324,6 +324,7 @@ class SunsetChargingConfig:
     target_soc: int = field(default_factory=lambda: int(os.getenv("SUNSET_TARGET_SOC", "100")))
     buffer_minutes: int = field(default_factory=lambda: int(os.getenv("SUNSET_BUFFER_MINUTES", "60")))
     min_charge_amps: int = field(default_factory=lambda: int(os.getenv("SUNSET_MIN_CHARGE_AMPS", "10")))
+    amp_step: int = field(default_factory=lambda: int(os.getenv("SUNSET_AMP_STEP", "10")))  # Sunset boost is rounded up to multiples of this (fewer inverter writes)
     peak_solar_hour: float = field(default_factory=lambda: float(os.getenv("SUNSET_PEAK_SOLAR_HOUR", "0")))  # 0 = auto (solar noon)
     peak_expected_kw: float = field(default_factory=lambda: float(os.getenv("SUNSET_PEAK_EXPECTED_KW", "0")))  # 0 = disabled (no cloudy compensation)
     cloud_threshold_pct: int = field(default_factory=lambda: int(os.getenv("SUNSET_CLOUD_THRESHOLD_PCT", "60")))  # Below this % of expected → boost

@@ -12,7 +12,8 @@ from datetime import datetime
 from typing import Optional
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, get_app_path
+from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, sunset_config, get_app_path
+from src.env_export import merge_env_text, build_numbered_lines
 from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
@@ -404,6 +405,25 @@ class DeyeApp(ctk.CTk):
         # Error log viewer
         self.log_viewer = ErrorLogViewer(self.scrollable)
         self.log_viewer.grid(row=current_row, column=0, columnspan=3, sticky="nsew", padx=20, pady=10)
+        current_row += 1
+
+        # Save current settings as a .env copy (never overwrites .env itself)
+        save_frame = ctk.CTkFrame(self.scrollable, fg_color="transparent")
+        save_frame.grid(row=current_row, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 15))
+        self.btn_save_env = ctk.CTkButton(
+            save_frame, text="💾 Save current settings to .env.saved",
+            width=260, height=32,
+            fg_color="#2C3E50", hover_color="#34495E",
+            command=self._save_settings_to_env_copy
+        )
+        self.btn_save_env.pack(side="left")
+        self.lbl_save_env = ctk.CTkLabel(
+            save_frame,
+            text="Writes a copy next to .env - replace .env with it manually to keep these settings after a restart.",
+            font=("Roboto", 11),
+            text_color="gray"
+        )
+        self.lbl_save_env.pack(side="left", padx=10)
 
     def _read_initial_charge_settings(self) -> None:
         """Read and display initial charge settings from the inverter."""
@@ -1285,10 +1305,9 @@ class DeyeApp(ctk.CTk):
         if required_amps > effective_charge:
             # Need more than what schedule+protection provides
             sunset_boost = required_amps - base_charge - self._protection_boost_amps
-            sunset_boost = max(0, sunset_boost)
-            
-            # Round to 10A steps to avoid writing every single amp change
-            sunset_boost = ((sunset_boost + 9) // 10) * 10
+            amp_step = int(settings.get("amp_step", sunset_config.amp_step))
+            sunset_boost = self._step_sunset_boost(
+                max(0, sunset_boost), self._sunset_boost_amps, self._sunset_active, amp_step)
             
             # Also retry if boost is set but register doesn't match (failed write recovery).
             # Off-grid multiplier is applied as the very last step.
@@ -1345,6 +1364,20 @@ class DeyeApp(ctk.CTk):
         self.after(0, lambda: self.sunset_panel.update_state(
             sunset_str, hours_left, required_amps, self._sunset_active,
             self._cloud_boost_factor, weather_str, sparkline))
+
+    @staticmethod
+    def _step_sunset_boost(raw_boost: int, current_boost: int, active: bool, amp_step: int) -> int:
+        """Round the sunset boost up to the amp step so the inverter is only rewritten
+        when a meaningfully different rate is needed (e.g. step 20 → 20/40/60A).
+
+        Increases apply immediately. Decreases wait until the need is half a step below
+        the lower step, so a requirement hovering at a step boundary doesn't flip every cycle.
+        """
+        amp_step = max(1, amp_step)
+        stepped = -(-raw_boost // amp_step) * amp_step
+        if active and stepped < current_boost and raw_boost > current_boost - amp_step - amp_step / 2:
+            return current_boost
+        return stepped
 
     def _get_export_breakdown(self, data) -> tuple[int, int, bool, bool]:
         """
@@ -2272,6 +2305,176 @@ class DeyeApp(ctk.CTk):
                 outlet.config.on_grid_always_on = cfg_vars["on_grid_always_on"].get()
                 outlet.config.restart_delay_enabled = cfg_vars["restart_delay_enabled"].get()
                 outlet.config.restart_delay_minutes = int(self._get_safe_value(cfg_vars["restart_delay_minutes"], outlet.config.restart_delay_minutes))
+
+    def _collect_env_settings(self) -> tuple[dict, dict]:
+        """Map the live UI values to their .env keys.
+
+        Returns (values, numbered-key groups). Raises ValueError naming the section
+        when an entry can't be parsed, so nothing is saved from fallback defaults.
+        """
+        def section(name, getter):
+            try:
+                return getter()
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"invalid value in {name} ({e})") from e
+
+        values: dict = {}
+
+        defaults = section("Schedule defaults", lambda: self.schedule_panel.get_default_values(strict=True))
+        values.update({
+            "DEYE_DEFAULT_MAX_CHARGE_AMPS": defaults["max_charge_amps"],
+            "DEYE_DEFAULT_GRID_CHARGE_AMPS": defaults["grid_charge_amps"],
+            "DEYE_DEFAULT_MAX_DISCHARGE_AMPS": defaults["max_discharge_amps"],
+        })
+        schedule_rows = []
+        for i, row in enumerate(self.schedule_panel.schedule_rows, 1):
+            s = row.get_schedule()
+            if s is None:
+                raise ValueError(f"invalid value in charge schedule row {i}")
+            schedule_rows.append({"enabled": s["enabled"], "value": (
+                f"{s['start_hour']:02d}:{s['start_min']:02d}-{s['end_hour']:02d}:{s['end_min']:02d},"
+                f"{s['max_charge_amps']},{s['grid_charge_amps']},{s['max_discharge_amps']},"
+                f"{'sell' if s['sell'] else 'nosell'},{s['min_batt_pct']},{s['sell_power']}"
+            )})
+
+        p = section("Charge Prioritization", lambda: self.prioritization_panel.get_settings(strict=True))
+        values.update({
+            "CHARGE_PRIORITIZATION_ENABLED": p["enabled"],
+            "CHARGE_PRIORITIZATION_BOOST_TARGET_SOC": p["boost_target_soc"],
+            "CHARGE_PRIORITIZATION_NORMAL_TARGET_SOC": p["normal_target_soc"],
+            "CHARGE_PRIORITIZATION_SELL_TRIGGER_W": p["sell_trigger_power"],
+            "CHARGE_PRIORITIZATION_GRID_PULL_W": p["grid_pull_threshold_w"],
+            "CHARGE_PRIORITIZATION_GRID_PULL_SEC": p["grid_pull_duration_sec"],
+        })
+
+        pr = section("Overpower Protection", lambda: self.protection_panel.get_settings(strict=True))
+        values.update({
+            # Sell mode only switches protection off temporarily; save the user's choice
+            "PROTECTION_ENABLED_AT_STARTUP": pr["enabled"] or self._protection_disabled_by_sell,
+            # Max sell power is not saved: the field is overwritten at runtime with the
+            # inverter register and the active schedule slot's sell power.
+            "PROTECTION_POWER_THRESHOLD_PCT": pr["power_threshold_pct"],
+            "PROTECTION_RECOVERY_THRESHOLD_PCT": pr["recovery_threshold_pct"],
+            "PROTECTION_VOLTAGE_WARNING": pr["voltage_warning"],
+            "PROTECTION_VOLTAGE_RECOVERY": pr["voltage_recovery"],
+            "PROTECTION_VOLTAGE_HOLD_MARGIN": pr["voltage_hold_margin"],
+            "PROTECTION_CHARGE_STEP": pr["charge_step"],
+            "PROTECTION_ADJUSTMENT_INTERVAL": pr["adjustment_interval"],
+        })
+
+        su = section("Sunset Charging", lambda: self.sunset_panel.get_settings(strict=True))
+        values.update({
+            "SUNSET_CHARGING_ENABLED": self.sunset_panel.is_enabled(),
+            "SUNSET_SELLING_FIRST_ENABLED": self.sunset_panel.is_selling_first_enabled(),
+            "SOLAR_LATITUDE": su["latitude"],
+            "SOLAR_LONGITUDE": su["longitude"],
+            "BATTERY_CAPACITY_AH": su["battery_capacity_ah"],
+            "SUNSET_TARGET_SOC": su["target_soc"],
+            "SUNSET_BUFFER_MINUTES": su["buffer_minutes"],
+            "SUNSET_MIN_CHARGE_AMPS": su["min_charge_amps"],
+            "SUNSET_AMP_STEP": su["amp_step"],
+            "SUNSET_PEAK_SOLAR_HOUR": su["peak_solar_hour"],
+            "SUNSET_PEAK_EXPECTED_KW": su["peak_expected_kw"],
+            "SUNSET_CLOUD_THRESHOLD_PCT": su["cloud_threshold_pct"],
+            "SUNSET_CLOUD_MAX_BOOST": su["cloud_max_boost"],
+        })
+
+        hp = section("Heat Pump", lambda: self.heatpump_panel.get_settings(strict=True))
+        values.update({
+            "HEATPUMP_ENABLED": hp["enabled"],
+            "HEATPUMP_SOLAR_OVERRIDE": hp["solar_override_enabled"],
+            "HEATPUMP_SOLAR_OVERRIDE_PRODUCTION_MIN": hp["solar_override_production_min"],
+            "HEATPUMP_SOLAR_OVERRIDE_EXPORT_MIN": hp["solar_override_export_min"],
+            "HEATPUMP_SOLAR_OVERRIDE_CLOUDY_PRODUCTION_MIN": hp["solar_override_cloudy_production_min"],
+            "HEATPUMP_SOLAR_OVERRIDE_HP_POWER": hp["solar_override_hp_power"],
+            "HEATPUMP_SOLAR_OVERRIDE_DELAY": hp["solar_override_delay"],
+            "HEATPUMP_SOC_ON_THRESHOLD": hp["soc_on_threshold"],
+            "HEATPUMP_SOC_OFF_THRESHOLD": hp["soc_off_threshold"],
+            "HEATPUMP_HV_THRESHOLD": hp["hv_threshold"],
+            "HEATPUMP_HV_OFF_THRESHOLD": hp["hv_off_threshold"],
+            "HEATPUMP_LV_THRESHOLD": hp["lv_threshold"],
+            "HEATPUMP_LV_RECOVERY_VOLTAGE": hp["lv_recovery_voltage"],
+            "HEATPUMP_LV_RECOVERY_DELAY": hp["lv_recovery_delay"],
+            "HEATPUMP_PHASE_CHANGE_DELAY": hp["phase_change_delay"],
+        })
+        hp_rows = []
+        for i, row in enumerate(self.heatpump_panel.schedule_rows, 1):
+            s = row.get_schedule()
+            if s is None:
+                raise ValueError(f"invalid value in heat pump schedule row {i}")
+            hp_rows.append({"enabled": s["enabled"], "value": (
+                f"{s['start_hour']:02d}:{s['start_min']:02d}-{s['end_hour']:02d}:{s['end_min']:02d},"
+                f"{s['min_temp']:g},{s['max_temp']:g}"
+            )})
+
+        ev = section("EV Charger", lambda: self.ev_panel.get_settings(strict=True))
+        values.update({
+            "EV_CHARGER_ENABLED": ev["enabled"],
+            "EV_CHARGER_MIN_AMPS_1P": ev["min_amps_1p"],
+            "EV_CHARGER_MIN_AMPS_3P": ev["min_amps_3p"],
+            "EV_CHARGER_MAX_AMPS": ev["max_amps"],
+            "EV_CHARGER_STOP_SOC": ev["stop_soc"],
+            "EV_CHARGER_START_SOC": ev["start_soc"],
+            "EV_CHARGER_SOLAR_MODE": ev["solar_mode"],
+            "EV_CHARGER_CHANGE_INTERVAL": ev["change_interval"],
+            "EV_CHARGER_CHARGE_BY_HOUR": ev["charge_by_hour"],
+            "EV_CHARGER_GRID_CHARGE_AMPS": ev["grid_charge_amps"],
+            "EV_CHARGER_SOLAR_RAMP_DOWN_DELAY": ev["solar_ramp_down_delay"],
+            "EV_CHARGER_SOLAR_AMP_STEPS": ev["solar_amp_steps"],
+            "EV_CHARGER_EV_FIRST": ev["ev_first"],
+            "EV_CHARGER_PHASES": ev["phases"],
+        })
+
+        outlets = self.tapo.get_all_outlets()
+        for outlet_id, cfg_vars in self.outlet_cfg.items():
+            outlet_cfg = outlets[outlet_id].config
+            for field_name, var in cfg_vars.items():
+                current = getattr(outlet_cfg, field_name)
+                raw = var.get()
+                try:
+                    if isinstance(current, bool):
+                        value = bool(raw)
+                    elif isinstance(current, int):
+                        value = int(float(str(raw).strip()))  # same parsing as _sync_outlet_configs
+                    elif isinstance(current, float):
+                        value = float(str(raw).strip())
+                    else:
+                        value = str(raw).strip()
+                except ValueError as e:
+                    raise ValueError(f"invalid value in {outlet_cfg.name} '{field_name}' ({e})") from e
+                values[f"OUTLET_{outlet_id}_{field_name.upper()}"] = value
+
+        groups = {
+            "SCHEDULE_": build_numbered_lines("SCHEDULE_", schedule_rows),
+            "HEATPUMP_SCHEDULE_": build_numbered_lines("HEATPUMP_SCHEDULE_", hp_rows),
+        }
+        return values, groups
+
+    def _save_settings_to_env_copy(self) -> None:
+        """Write the current UI settings to .env.saved, using .env as the template."""
+        env_path = get_app_path() / ".env"
+        out_path = get_app_path() / ".env.saved"
+        try:
+            values, groups = self._collect_env_settings()
+        except ValueError as e:
+            self._log_error(f"[Settings] Not saved: {e}")
+            self.lbl_save_env.configure(text=f"Not saved: {e}", text_color="#E74C3C")
+            return
+        try:
+            # Raw read keeps the template's line endings; utf-8-sig drops a BOM if present
+            template = env_path.read_bytes().decode("utf-8-sig") if env_path.exists() else ""
+            with open(out_path, "w", encoding="utf-8", newline="") as f:
+                f.write(merge_env_text(template, values, groups))
+        except (OSError, UnicodeDecodeError) as e:
+            self._log_error(f"[Settings] Could not write {out_path}: {e}")
+            self.lbl_save_env.configure(text=f"Save failed: {e}", text_color="#E74C3C")
+            return
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self._log_error(f"[Settings] Saved current settings to {out_path} - replace .env with it to keep them")
+        self.lbl_save_env.configure(
+            text=f"Saved {stamp} → {out_path} (replace .env with it manually to keep these settings)",
+            text_color="#2ECC71"
+        )
 
     def _process_logic(self, data: InverterData) -> None:
         """Process EMS logic (called from background thread)."""

@@ -273,6 +273,43 @@ class TestSunsetChargingModule(unittest.TestCase):
         self.assertFalse(self.app._sunset_active)
 
 
+class TestSunsetAmpStep(unittest.TestCase):
+    step = staticmethod(DeyeApp._step_sunset_boost)
+
+    def test_rounds_up_to_step(self):
+        self.assertEqual(self.step(1, 0, False, 20), 20)
+        self.assertEqual(self.step(20, 0, False, 20), 20)
+        self.assertEqual(self.step(21, 0, False, 20), 40)
+        self.assertEqual(self.step(55, 0, False, 20), 60)
+
+    def test_increase_applies_immediately(self):
+        self.assertEqual(self.step(41, 40, True, 20), 60)
+
+    def test_small_drop_keeps_current_step(self):
+        # At 60A, a need of 40A or 31A stays at 60A (within 1.5 steps)
+        self.assertEqual(self.step(40, 60, True, 20), 60)
+        self.assertEqual(self.step(31, 60, True, 20), 60)
+
+    def test_large_drop_steps_down(self):
+        self.assertEqual(self.step(30, 60, True, 20), 40)
+        self.assertEqual(self.step(5, 60, True, 20), 20)
+
+    def test_no_hysteresis_when_inactive(self):
+        self.assertEqual(self.step(40, 60, False, 20), 40)
+
+    def test_boundary_hover_does_not_flip(self):
+        current = self.step(41, 0, False, 20)
+        writes = 0
+        for need in [40, 41, 39, 41, 40, 42, 38]:
+            new = self.step(need, current, True, 20)
+            writes += new != current
+            current = new
+        self.assertEqual((current, writes), (60, 0))
+
+    def test_invalid_step_treated_as_one(self):
+        self.assertEqual(self.step(13, 0, False, 0), 13)
+
+
 class TestEVSEOfflineStatus(unittest.TestCase):
     def setUp(self):
         self.app = MagicMock(spec=DeyeApp)

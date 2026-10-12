@@ -904,8 +904,11 @@ class TimeSchedulePanel(ctk.CTkFrame):
                 schedules.append(schedule)
         return schedules
     
-    def get_default_values(self) -> dict:
-        """Get the default charge values to apply when no schedule is active."""
+    def get_default_values(self, strict: bool = False) -> dict:
+        """Get the default charge values to apply when no schedule is active.
+
+        With strict=True, invalid entries raise ValueError instead of returning fallbacks.
+        """
         try:
             return {
                 "max_charge_amps": int(self.default_max_charge.get()),
@@ -916,6 +919,8 @@ class TimeSchedulePanel(ctk.CTkFrame):
                 "min_batt_pct": 20,
             }
         except ValueError:
+            if strict:
+                raise
             return {"max_charge_amps": 60, "grid_charge_amps": 40, "max_discharge_amps": 150, "sell": False, "sell_power": 0, "min_batt_pct": 20}
     
     def update_status(self, active_schedule: dict = None, sell_suppressed: bool = False, suppression_reason: str = "") -> None:
@@ -1094,8 +1099,8 @@ class ChargePrioritizationPanel(ctk.CTkFrame):
             self.enable_switch.deselect()
             self.lbl_status.configure(text="Disabled", text_color="gray")
 
-    def get_settings(self) -> dict:
-        """Get current settings from UI entries."""
+    def get_settings(self, strict: bool = False) -> dict:
+        """Get current settings from UI entries (strict=True raises on invalid entries)."""
         try:
             return {
                 "enabled": self.enabled_var.get(),
@@ -1106,6 +1111,8 @@ class ChargePrioritizationPanel(ctk.CTkFrame):
                 "grid_pull_duration_sec": int(self.pull_duration.get()),
             }
         except ValueError:
+            if strict:
+                raise
             return {
                 "enabled": self.enabled_var.get(),
                 "boost_target_soc": charge_prioritization_config.boost_target_soc,
@@ -1375,8 +1382,8 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
         except ValueError:
             pass  # Ignore if value can't be parsed
     
-    def get_settings(self) -> dict:
-        """Get current protection settings."""
+    def get_settings(self, strict: bool = False) -> dict:
+        """Get current protection settings (strict=True raises on invalid entries)."""
         try:
             return {
                 "enabled": self.enabled_var.get(),
@@ -1387,9 +1394,11 @@ class OverpowerProtectionPanel(ctk.CTkFrame):
                 "voltage_recovery": float(self.voltage_recovery.get()),
                 "voltage_hold_margin": float(self.voltage_hold_margin.get()),
                 "charge_step": int(self.charge_step.get()),
-                "adjustment_interval": protection_config.adjustment_interval,
+                "adjustment_interval": max(1, int(self.adjustment_interval.get())),
             }
         except ValueError:
+            if strict:
+                raise
             # Return defaults on parse error
             return {
                 "enabled": False,
@@ -1557,6 +1566,14 @@ class SunsetChargingPanel(ctk.CTkFrame):
         ctk.CTkLabel(settings_frame, text="(0=auto)", font=("Roboto", 9),
                       text_color="#777").grid(row=1, column=6, padx=(0, 5), pady=8, sticky="w")
 
+        # Amp step: sunset boost is rounded up to multiples of this to limit inverter writes
+        ctk.CTkLabel(settings_frame, text="Amp Step:", font=("Roboto", 10),
+                      text_color="#3498DB").grid(row=1, column=7, padx=(10, 2), pady=8, sticky="w")
+        self.amp_step = ctk.CTkEntry(settings_frame, width=40, justify="center")
+        self.amp_step.grid(row=1, column=8, padx=2, pady=8)
+        self.amp_step.insert(0, str(sunset_config.amp_step))
+        ctk.CTkLabel(settings_frame, text="A", font=("Roboto", 10)).grid(row=1, column=9, padx=(0, 5), pady=8, sticky="w")
+
         # Third row: Cloudy day compensation
         ctk.CTkLabel(settings_frame, text="Peak kW:", font=("Roboto", 10),
                       text_color="#E67E22").grid(row=2, column=0, padx=(10, 2), pady=8, sticky="w")
@@ -1656,8 +1673,8 @@ class SunsetChargingPanel(ctk.CTkFrame):
             return 0.0
         return float(raw)
 
-    def get_settings(self) -> dict:
-        """Get current settings from UI fields."""
+    def get_settings(self, strict: bool = False) -> dict:
+        """Get current settings from UI fields (strict=True raises on invalid entries)."""
         try:
             return {
                 "latitude": float(self.latitude.get()),
@@ -1666,12 +1683,15 @@ class SunsetChargingPanel(ctk.CTkFrame):
                 "target_soc": int(self.target_soc.get()),
                 "buffer_minutes": int(self.buffer_minutes.get()),
                 "min_charge_amps": int(self.min_charge.get()),
+                "amp_step": max(1, int(self.amp_step.get())),
                 "peak_solar_hour": self._parse_peak_solar_hour(),
                 "peak_expected_kw": self._parse_peak_expected_kw(),
                 "cloud_threshold_pct": int(self.cloud_threshold.get()),
                 "cloud_max_boost": float(self.cloud_max_boost.get()),
             }
         except (ValueError, TypeError):
+            if strict:
+                raise
             return {
                 "latitude": sunset_config.latitude,
                 "longitude": sunset_config.longitude,
@@ -1679,6 +1699,7 @@ class SunsetChargingPanel(ctk.CTkFrame):
                 "target_soc": sunset_config.target_soc,
                 "buffer_minutes": sunset_config.buffer_minutes,
                 "min_charge_amps": sunset_config.min_charge_amps,
+                "amp_step": sunset_config.amp_step,
                 "peak_solar_hour": sunset_config.peak_solar_hour,
                 "peak_expected_kw": sunset_config.peak_expected_kw,
                 "cloud_threshold_pct": sunset_config.cloud_threshold_pct,
@@ -1965,8 +1986,11 @@ class EVChargerPanel(ctk.CTkFrame):
     def is_enabled(self) -> bool:
         return self.enabled_var.get()
 
-    def get_settings(self) -> dict:
-        """Return current settings as a dict matching EVSettings fields."""
+    def get_settings(self, strict: bool = False) -> dict:
+        """Return current settings as a dict matching EVSettings fields.
+
+        With strict=True, invalid entries raise instead of returning config defaults.
+        """
         try:
             phases_raw = self.phases_var.get().lower()
             if "1" in phases_raw:
@@ -2002,6 +2026,8 @@ class EVChargerPanel(ctk.CTkFrame):
                 "auto_default_phases": ev_charger_config.auto_default_phases,
             }
         except (ValueError, TypeError):
+            if strict:
+                raise
             return {
                 "enabled": self.enabled_var.get(),
                 "min_amps": ev_charger_config.min_amps_1p,
@@ -2444,8 +2470,8 @@ class HeatpumpPanel(ctk.CTkFrame):
     def is_enabled(self) -> bool:
         return self.enabled_var.get()
 
-    def get_settings(self) -> dict:
-        """Return current settings."""
+    def get_settings(self, strict: bool = False) -> dict:
+        """Return current settings (strict=True raises on invalid entries)."""
         schedules = []
         for row in self.schedule_rows:
             data = row.get_schedule()
@@ -2479,6 +2505,8 @@ class HeatpumpPanel(ctk.CTkFrame):
                 "boost": self.boost_var.get(),
             }
         except (ValueError, TypeError):
+            if strict:
+                raise
             return {
                 "enabled": False,
                 "schedules": schedules,
