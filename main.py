@@ -8,6 +8,7 @@ import time
 import threading
 import sys
 import os
+from collections import deque
 from datetime import datetime
 from typing import Optional
 import customtkinter as ctk
@@ -140,6 +141,7 @@ class DeyeApp(ctk.CTk):
         self._sell_load_low_since: float | None = None   # When load first dropped below high_load_kw for sell suppression
         self._sell_load_suppressed = False               # Whether selling is suppressed due to high load
         self._prev_ev_total_load_w: int = 0  # Previous total load for EV car-connect spike detection
+        self._ev_load_window: deque = deque()  # (time, total load W) over the last 30s for EV load-drop detection
         # Force the next sunset write to bypass the inverter-settled gate. Set on
         # resume from selling-first pause so the post-handover boost cannot get
         # stuck behind transient battery-power vs expected-power mismatches.
@@ -2038,6 +2040,32 @@ class DeyeApp(ctk.CTk):
         offline_text = " - EVSE: Offline" if self._evse_offline else ""
         self.after(0, lambda t=offline_text: self.lbl_evse_offline.configure(text=t))
 
+    def _check_ev_load_drop(self, total_load_w: int, ev_charging: bool, ev_power_w: int, now: float) -> bool:
+        """Poll the charger early when a large load drops while an EV is charging.
+
+        A car finishing or being unplugged drops a big load, and the charger is only
+        polled every 30s while charging. Polling right away applies the idle preset
+        (minimum amps for the next EV) before the cable can be moved to another car.
+        Few house loads exceed HIGH_LOAD_KW, so false triggers just cost one extra poll.
+        """
+        window = self._ev_load_window
+        window.append((now, total_load_w))
+        while window and now - window[0][0] > 30:
+            window.popleft()
+        if not ev_charging:
+            return False
+        threshold_w = deye_config.high_load_kw * 1000
+        if ev_power_w > 0:
+            # Make sure a minimum-rate session (e.g. 3P at 8A ≈ 5.5 kW) still triggers
+            threshold_w = min(threshold_w, 0.7 * ev_power_w)
+        peak_w = max(w for _, w in window)
+        if peak_w - total_load_w < threshold_w:
+            return False
+        print(f"[EV] Load dropped {peak_w - total_load_w}W while charging - polling charger early")
+        self.ev_charger.hint_load_drop()
+        window.clear()
+        return True
+
     def _process_ev_charging(self, data: InverterData) -> None:
         """Process EV charger logic (called from background thread)."""
         ui_settings = self.ev_panel.get_settings()
@@ -2099,6 +2127,7 @@ class DeyeApp(ctk.CTk):
                 and not charger_state.is_charging):
             self.ev_charger.hint_load_spike()
         self._prev_ev_total_load_w = total_load_w
+        self._check_ev_load_drop(total_load_w, charger_state.is_charging, power_w, time.time())
 
         # Log only on state changes to avoid spam
         # For solar charging, ignore wattage fluctuations — dedup on amps and phase only

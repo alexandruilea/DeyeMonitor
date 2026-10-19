@@ -62,6 +62,20 @@ class EVSettings:
         """Return the effective minimum amps for the current phase configuration."""
         return self.min_amps_3p if phases == 3 else self.min_amps_1p
 
+    def get_idle_preset_amps(self) -> int:
+        """Amps to leave an idle charger at, safe for whichever EV plugs in next.
+
+        In auto mode the next EV may be 3-phase, where the 1-phase minimum (e.g. 25A)
+        would draw ~3x the power, so use the lowest minimum. 1-phase EVs are raised
+        to their own minimum as soon as phase detection identifies them.
+        """
+        mode = (self.phases or "auto").lower()
+        if mode in ("1", "1p", "single"):
+            return self.min_amps_1p
+        if mode in ("3", "3p", "three"):
+            return self.min_amps_3p
+        return min(self.min_amps_1p, self.min_amps_3p)
+
 
 @dataclass
 class EVState:
@@ -80,6 +94,8 @@ class EVState:
     phase_detect_streak_3p: int = 0  # Consecutive samples indicating 3-phase
     phase_detect_streak_1p: int = 0  # Consecutive samples indicating 1-phase
     last_boost: bool = False         # Track boost toggle state to bypass cooldown on change
+    last_seen_charging: Optional[bool] = None  # Car-drawing state on the previous cycle
+    last_preset_time: float = 0.0    # When the idle preset was last sent (limits retries)
 
 
 class EVChargingLogic:
@@ -193,6 +209,13 @@ class EVChargingLogic:
         self.single_phase_idx = single_phase_idx
         phase_label = "3P" if active_phases == 3 else f"1P-L{single_phase_idx + 1}"
 
+        # A new session starts from the low idle preset, so give it its target
+        # right away instead of waiting out the cooldown (raising is always safe).
+        if charger_state.is_charging and self._state.last_seen_charging is False:
+            self._state.last_decision_time = 0.0
+            self._state.last_preset_time = 0.0
+        self._state.last_seen_charging = charger_state.is_charging
+
         # ── Grid charge mode — charge at configured amps while grid available ─
         if settings.grid_charge and data.is_grid_connected:
             grid_a = settings.grid_charge_amps
@@ -215,6 +238,21 @@ class EVChargingLogic:
                 self._state.was_charging = True
 
         cooldown = settings.change_interval * 60
+
+        # ── Charging stopped → preset the minimum for whichever EV is next ──
+        # Lowering amps is only safe while no car draws (otherwise it needs an
+        # OFF → set → ON cycle), so drop to the lowest minimum as soon as charging
+        # stops, bypassing the cooldown. E.g. moving the cable from a 1-phase EV
+        # at 25A to a 3-phase EV then starts at 8A instead of ~17 kW.
+        if charger_state.is_on and not charger_state.is_charging:
+            preset = settings.get_idle_preset_amps()
+            if (charger_state.current_amps != preset
+                    and now - self._state.last_preset_time >= cooldown):
+                self.charger.set_amps(preset)
+                self._state.last_amps_sent = preset
+                self._state.last_preset_time = now
+                return EVResult.IDLE, f"Preset {preset}A for next EV ({phase_label}, no car)"
+
         time_since_last = now - self._state.last_decision_time
         within_cooldown = time_since_last < cooldown
 
@@ -275,8 +313,9 @@ class EVChargingLogic:
         # ── No car drawing → don't churn the charger's flash ─────────
         # If the charger is ON but no car is actually charging (unplugged
         # or finished session), skip recomputing/writing target amps every
-        # cycle. We still respond instantly when the car plugs in because
-        # is_charging flips True and the cooldown is not reset here.
+        # cycle (the idle preset above already lowered the amps). We still
+        # respond instantly when the car plugs in because is_charging flips
+        # True and the session start resets the cooldown.
         if charger_state.is_on and not charger_state.is_charging:
             self._state.step_down_since = 0
             self._state.was_charging = False

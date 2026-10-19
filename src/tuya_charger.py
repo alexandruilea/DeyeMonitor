@@ -59,6 +59,7 @@ class TuyaChargerManager:
         self._json_error_streak: int = 0    # Consecutive protocol-mismatch errors — triggers version probe
         self._working_version: Optional[float] = None  # Protocol version confirmed to work
         self._hint_cooldown_until: float = 0.0  # Rate-limit load-spike hints (max once per 2 min)
+        self._drop_hint_cooldown_until: float = 0.0  # Rate-limit load-drop hints (max once per 2 min)
         self._was_disconnected: bool = False  # Set True on any failure; cleared on successful connect (logs Reconnected)
 
         # Cloud fallback
@@ -130,6 +131,18 @@ class TuyaChargerManager:
         if now < self._hint_cooldown_until:
             return
         self._hint_cooldown_until = now + 120
+        self._command_event.set()
+
+    def hint_load_drop(self) -> None:
+        """Wake up the poll loop early when a large load drop suggests charging just stopped,
+        so the idle preset for the next EV is applied without waiting for the next poll.
+
+        Rate-limited to once per 2 minutes (separately from load spikes).
+        """
+        now = time.time()
+        if now < self._drop_hint_cooldown_until:
+            return
+        self._drop_hint_cooldown_until = now + 120
         self._command_event.set()
 
     def stop(self) -> None:
@@ -423,14 +436,16 @@ class TuyaChargerManager:
                 desired_amps = pending_amps
                 scaled = desired_amps * self.config.dp_amps_scale
                 if desired_amps != self.state.current_amps:
-                    # When lowering amps while on: OFF → set → ON to avoid
-                    # overcurrent from the car still drawing the old rate.
-                    lowering = desired_amps < self.state.current_amps
-                    if lowering and self.state.is_on:
+                    # When lowering amps while a car is drawing: OFF → set → ON to
+                    # avoid overcurrent from the car still drawing the old rate.
+                    # With no car drawing, a single write is enough.
+                    safe_sequence = (desired_amps < self.state.current_amps
+                                     and self.state.is_on and self.state.is_charging)
+                    if safe_sequence:
                         self._device.set_value(switch_dp, False)
                         time.sleep(5)
                     self._device.set_value(amps_dp, scaled)
-                    if lowering and self.state.is_on:
+                    if safe_sequence:
                         time.sleep(5)
                         self._device.set_value(switch_dp, True)
                     desc_parts.append(f"{desired_amps}A")
@@ -549,16 +564,17 @@ class TuyaChargerManager:
         if pending_amps is not None:
             desired_amps = pending_amps
             if desired_amps != self.state.current_amps:
-                # Cloud: OFF → set amps → ON (same safe sequence)
-                lowering = desired_amps < self.state.current_amps
-                if lowering and self.state.is_on:
+                # Cloud: OFF → set amps → ON (same safe sequence, only while a car draws)
+                safe_sequence = (desired_amps < self.state.current_amps
+                                 and self.state.is_on and self.state.is_charging)
+                if safe_sequence:
                     self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': False}]})
                     time.sleep(5)
                 self._cloud.cloudrequest(
                     f'v2.0/cloud/thing/{devid}/shadow/properties/issue',
                     post={'properties': json.dumps({amps_code: desired_amps})}
                 )
-                if lowering and self.state.is_on:
+                if safe_sequence:
                     time.sleep(5)
                     self._cloud.sendcommand(devid, {'commands': [{'code': 'switch', 'value': True}]})
                 desc_parts.append(f"{desired_amps}A")
