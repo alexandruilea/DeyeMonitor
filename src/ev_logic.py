@@ -96,6 +96,7 @@ class EVState:
     last_boost: bool = False         # Track boost toggle state to bypass cooldown on change
     last_seen_charging: Optional[bool] = None  # Car-drawing state on the previous cycle
     last_preset_time: float = 0.0    # When the idle preset was last sent (limits retries)
+    awaiting_draw_since: float = 0.0  # When we switched the charger ON and are waiting for the car to draw
 
 
 class EVChargingLogic:
@@ -103,6 +104,10 @@ class EVChargingLogic:
     Stateless-ish logic engine for EV charging decisions.
     Call `process()` every inverter poll cycle.
     """
+
+    # After switching the charger ON, wait this long for the car to start drawing
+    # before treating it as idle (the charger is polled every 60s while idle).
+    PRESET_GRACE_S = 180
 
     def __init__(self, charger: TuyaChargerManager, auto_default_phases: int = 3):
         self.charger = charger
@@ -215,6 +220,8 @@ class EVChargingLogic:
             self._state.last_decision_time = 0.0
             self._state.last_preset_time = 0.0
         self._state.last_seen_charging = charger_state.is_charging
+        if charger_state.is_charging:
+            self._state.awaiting_draw_since = 0.0
 
         # ── Grid charge mode — charge at configured amps while grid available ─
         if settings.grid_charge and data.is_grid_connected:
@@ -244,7 +251,11 @@ class EVChargingLogic:
         # OFF → set → ON cycle), so drop to the lowest minimum as soon as charging
         # stops, bypassing the cooldown. E.g. moving the cable from a 1-phase EV
         # at 25A to a 3-phase EV then starts at 8A instead of ~17 kW.
-        if charger_state.is_on and not charger_state.is_charging:
+        # Right after we switch the charger ON, "on but not drawing" just means the
+        # car hasn't started yet (and the charger hasn't been polled), so wait.
+        awaiting_draw = (self._state.awaiting_draw_since > 0
+                         and now - self._state.awaiting_draw_since < self.PRESET_GRACE_S)
+        if charger_state.is_on and not charger_state.is_charging and not awaiting_draw:
             preset = settings.get_idle_preset_amps()
             if (charger_state.current_amps != preset
                     and now - self._state.last_preset_time >= cooldown):
@@ -550,6 +561,7 @@ class EVChargingLogic:
         self._state.last_amps_sent = amps
         self._state.last_on_off_sent = True
         self._state.was_charging = True
+        self._state.awaiting_draw_since = now
 
     def _send_off(self, now: float) -> None:
         self.charger.turn_off()

@@ -2143,7 +2143,8 @@ class DeyeApp(ctk.CTk):
             if result in (EVResult.CHARGING, EVResult.SOLAR_CHARGING,
                           EVResult.SOC_TOO_LOW, EVResult.STOPPED,
                           EVResult.CHARGER_OFFLINE, EVResult.BATTERY_PACED,
-                          EVResult.GRID_CHARGING, EVResult.GRID_PULL_STOP):
+                          EVResult.GRID_CHARGING, EVResult.GRID_PULL_STOP,
+                          EVResult.IDLE):
                 self._log_error(f"EV: {result.value} ({detail})")
 
         self.after(0, lambda: self.ev_panel.update_ev_state(

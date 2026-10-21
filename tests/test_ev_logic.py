@@ -167,6 +167,44 @@ class TestIdlePreset(unittest.TestCase):
         self.assertEqual(charger.amps_sent, [8, 25, 8])
 
 
+class TestPresetAfterTurnOn(unittest.TestCase):
+    """Log 13:36:53: ON at 26A, then the idle preset cut it to 8A two seconds later."""
+
+    def setUp(self):
+        self.settings = make_settings()
+        self.charger = FakeCharger(is_on=False, is_charging=False, current_amps=8)
+        self.logic = EVChargingLogic(self.charger)
+        self.sunny = make_data(pv_power=15000)
+        self.sunny.grid_power = -8000
+        self.logic.process(self.sunny, self.settings)
+        self.assertEqual(self.charger.on_off_sent, [True])
+        self.on_amps = self.charger.amps_sent[-1]
+        self.assertGreater(self.on_amps, 8)
+        # Charger applied the ON command; car hasn't started drawing yet
+        self.charger.state.is_on = True
+        self.charger.state.current_amps = self.on_amps
+
+    def test_no_preset_while_waiting_for_car_to_draw(self):
+        for _ in range(5):
+            self.logic.process(self.sunny, self.settings)
+        self.assertEqual(self.charger.amps_sent, [self.on_amps])
+
+    def test_preset_after_grace_if_no_car_draws(self):
+        self.logic._state.awaiting_draw_since -= EVChargingLogic.PRESET_GRACE_S + 1
+        result, detail = self.logic.process(self.sunny, self.settings)
+        self.assertEqual(self.charger.amps_sent, [self.on_amps, 8])
+        self.assertEqual(result, EVResult.IDLE)
+
+    def test_stop_after_car_drew_presets_immediately(self):
+        self.charger.state.is_charging = True
+        self.charger.state.phase_currents = (10.0, 10.0, 10.0)
+        self.logic.process(self.sunny, self.settings)
+        self.charger.state.is_charging = False  # unplugged within the grace period
+        result, _ = self.logic.process(self.sunny, self.settings)
+        self.assertEqual(self.charger.amps_sent[-1], 8)
+        self.assertEqual(result, EVResult.IDLE)
+
+
 class TestEVLoadDropHint(unittest.TestCase):
     def setUp(self):
         from collections import deque
