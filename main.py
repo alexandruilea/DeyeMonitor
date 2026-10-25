@@ -126,6 +126,7 @@ class DeyeApp(ctk.CTk):
         self._protection_boost_amps = 0  # Current boost amount added on top of schedule
         self._protection_active = False  # Whether protection is currently boosting
         self._last_protection_adjustment = 0.0  # Timestamp of last charge adjustment
+        self._bms_charge_limit = 0  # Latest BMS charge current limit (A); 0 = unknown
         
         # Sunset charging state
         self._sunset_boost_amps = 0  # Current sunset boost amount
@@ -726,11 +727,12 @@ class DeyeApp(ctk.CTk):
         schedule_key = schedule_key + ("og", self._offgrid_active)
         
         # Only apply if settings changed — but also re-apply if the register
-        # is out of sync (e.g. a previous write failed)
-        bms_limit = data.bms_charge_current_limit if data is not None else 0
+        # is out of sync (e.g. a previous write failed).
+        # The BMS charge limit is applied raise-only inside _apply_charge_caps
+        # (shared by every writer) so this path always agrees with sunset and
+        # protection, and a falling BMS limit never triggers a write.
         effective_target_max = self._apply_charge_caps(
-            target_max + self._protection_boost_amps + self._sunset_boost_amps,
-            bms_limit=bms_limit,
+            target_max + self._protection_boost_amps + self._sunset_boost_amps
         )
 
         # Startup gate: defer writing max_charge until sunset charging has had
@@ -766,6 +768,24 @@ class DeyeApp(ctk.CTk):
                              self._current_work_mode == target_work_mode)
         if self._last_applied_schedule == schedule_key and register_in_sync and work_mode_in_sync:
             return
+
+        # Per-register write cooldown: if every out-of-sync register is still
+        # cooling down, there is nothing we can write yet — wait silently
+        # instead of re-entering the apply block (and logging) every poll.
+        cooldown = self.inverter.write_cooldown_remaining
+        pending_regs = []
+        if not max_charge_in_sync:
+            pending_regs.append(deye_config.reg_max_charge_amps)
+        if self._current_grid_charge != target_grid:
+            pending_regs.append(deye_config.reg_grid_charge_current)
+        if self._current_max_discharge != target_discharge:
+            pending_regs.append(deye_config.reg_max_discharge_amps)
+        if self._current_sell_power != target_sell_power:
+            pending_regs.append(deye_config.reg_max_solar_sell_power)
+        if self._current_work_mode is not None and self._current_work_mode != target_work_mode:
+            pending_regs.append(self.inverter.REG_WORK_MODE)
+        if pending_regs and all(cooldown(r) > 0 for r in pending_regs):
+            return
         
         # Apply the settings - only write values that actually changed
         if target_sell_power > deye_config.sell_cutoff_power:
@@ -780,7 +800,8 @@ class DeyeApp(ctk.CTk):
             print(f"[SCHEDULE] No active slot - applying defaults: Max={target_max}A, Grid={target_grid}A, Discharge={target_discharge}A{sell_str}")
         
         all_success = True
-        
+        deferred = []  # registers skipped because their write cooldown hasn't elapsed
+
         # Only write max charge if it changed — but respect active sunset/protection boosts
         # plus the off-grid 50% multiplier (applied last, before the inverter cap).
         # When charge_gate_open is False, skip the write and let sunset charging
@@ -790,6 +811,8 @@ class DeyeApp(ctk.CTk):
                 if not getattr(self, "_charge_gate_logged", False):
                     print("[SCHEDULE] Deferring max_charge write until weather forecast settles")
                     self._charge_gate_logged = True
+            elif cooldown(deye_config.reg_max_charge_amps) > 0:
+                deferred.append(("max_charge", deye_config.reg_max_charge_amps))
             elif self.inverter.set_max_charge_current(effective_target_max):
                 self._current_max_charge = effective_target_max
             else:
@@ -797,21 +820,27 @@ class DeyeApp(ctk.CTk):
         
         # Only write grid charge if it changed
         if self._current_grid_charge != target_grid:
-            if self.inverter.set_grid_charge_current(target_grid):
+            if cooldown(deye_config.reg_grid_charge_current) > 0:
+                deferred.append(("grid_charge", deye_config.reg_grid_charge_current))
+            elif self.inverter.set_grid_charge_current(target_grid):
                 self._current_grid_charge = target_grid
             else:
                 all_success = False
         
         # Only write max discharge if it changed
         if self._current_max_discharge != target_discharge:
-            if self.inverter.set_max_discharge_current(target_discharge):
+            if cooldown(deye_config.reg_max_discharge_amps) > 0:
+                deferred.append(("max_discharge", deye_config.reg_max_discharge_amps))
+            elif self.inverter.set_max_discharge_current(target_discharge):
                 self._current_max_discharge = target_discharge
             else:
                 all_success = False
         
         # Set work mode (Selling First or Zero Export)
         if self._current_work_mode != target_work_mode:
-            if self.inverter.set_work_mode(target_work_mode):
+            if cooldown(self.inverter.REG_WORK_MODE) > 0:
+                deferred.append(("work_mode", self.inverter.REG_WORK_MODE))
+            elif self.inverter.set_work_mode(target_work_mode):
                 self._current_work_mode = target_work_mode
                 print(f"[SCHEDULE] Work mode set to {'Selling First' if target_work_mode == 0 else 'Zero Export (' + ('Load' if target_work_mode == 1 else 'CT') + ')'}")
             else:
@@ -832,7 +861,9 @@ class DeyeApp(ctk.CTk):
         # transitioning out of a sell slot (e.g. 1500W night → 16000W morning)
         # or suppressing sell (e.g. 3000W -> 0W cutoff) always writes the new value.
         if self._current_sell_power != target_sell_power:
-            if self.inverter.set_max_sell_power(target_sell_power):
+            if cooldown(deye_config.reg_max_solar_sell_power) > 0:
+                deferred.append(("sell_power", deye_config.reg_max_solar_sell_power))
+            elif self.inverter.set_max_sell_power(target_sell_power):
                 self._current_sell_power = target_sell_power
                 print(f"[SCHEDULE] Max sell power set to {target_sell_power}W")
             else:
@@ -847,7 +878,13 @@ class DeyeApp(ctk.CTk):
                 self._last_prot_max_sell = configured_sell_power
                 self.after(0, lambda p=configured_sell_power: self.protection_panel.set_max_sell_power(p))
         
-        if all_success:
+        if all_success and deferred:
+            # Leave _last_applied_schedule unset so the deferred registers are
+            # written once their cooldown elapses.
+            self._update_charge_display()
+            waits = ", ".join(f"{name} in {int(cooldown(reg))}s" for name, reg in deferred)
+            print(f"[SCHEDULE] Write cooldown active — deferred: {waits}")
+        elif all_success:
             self._last_applied_schedule = schedule_key
             self._update_charge_display()
             if active_schedule:
@@ -857,18 +894,28 @@ class DeyeApp(ctk.CTk):
         else:
             self._log_error(f"Failed to apply charge settings")
 
-    def _apply_charge_caps(self, amps: int, bms_limit: int = 0) -> int:
-        """Apply the off-grid 50% multiplier (if active) then clamp to inverter and BMS caps.
+    def _apply_charge_caps(self, amps: int) -> int:
+        """Apply the off-grid 50% multiplier (if active), the inverter cap, then a
+        raise-only BMS cap.
 
         This is the final stage applied to any computed max-charge target so the
         off-grid boost stacks on top of all other boosts (schedule + protection +
         sunset) without changing how those values are tracked internally.
+
+        BMS cap: never request more than the BMS accepts (the inverter would
+        ignore it), but never write just to follow a falling BMS limit either.
+        A target above the BMS limit resolves to the current register value if
+        that already meets the limit, otherwise to the limit itself. Because
+        the result depends only on the target, the BMS limit and the current
+        register, every writer computes the same value and they can't fight.
         """
         if self._offgrid_active:
             amps = int(round(amps * 1.5))
         amps = min(amps, deye_config.max_charge_amps_limit)
-        if bms_limit > 0:
-            amps = min(amps, bms_limit)
+        bms_limit = getattr(self, "_bms_charge_limit", 0) or 0
+        if bms_limit > 0 and amps > bms_limit:
+            current = getattr(self, "_current_max_charge", None) or 0
+            amps = current if current >= bms_limit else bms_limit
         return max(0, amps)
 
     def _update_charge_display(self) -> None:
@@ -1048,7 +1095,7 @@ class DeyeApp(ctk.CTk):
             return
 
         # Throttle adjustments to avoid excessive inverter writes
-        if current_time - self._last_sunset_adjustment < deye_config.min_register_write_interval:
+        if current_time - self._last_sunset_adjustment < deye_config.get_register_write_interval(deye_config.reg_max_charge_amps):
             return
 
         # ── "Selling First" handover ────────────────────────────────────
@@ -1076,7 +1123,8 @@ class DeyeApp(ctk.CTk):
                 if self._load_high_since is None:
                     self._load_high_since = current_time
                 if (not self._selling_first_paused
-                        and (current_time - self._load_high_since) >= sf_hold_sec):
+                        and (current_time - self._load_high_since) >= sf_hold_sec
+                        and self.inverter.max_charge_cooldown_remaining() <= 0):
                     # Trigger pause: drop sunset boost, reset to base + protection
                     base = self._get_base_charge_amps()
                     target_charge = self._apply_charge_caps(
@@ -1320,6 +1368,14 @@ class DeyeApp(ctk.CTk):
                            (self._sunset_active and self._current_max_charge != expected_charge))
             
             if needs_write:
+                # Register still cooling down from a previous write (by any
+                # writer) — wait quietly instead of attempting a throttled write.
+                if self.inverter.max_charge_cooldown_remaining() > 0:
+                    self.after(0, lambda: self.sunset_panel.update_state(
+                        sunset_str, hours_left, required_amps, self._sunset_active,
+                        self._cloud_boost_factor, weather_str, sparkline))
+                    return
+
                 # Verify inverter has caught up before changing charge speed.
                 # Bypass the gate when _sunset_force_write is set (e.g. just
                 # resumed from selling-first pause) — the inverter has been
@@ -1458,7 +1514,12 @@ class DeyeApp(ctk.CTk):
         if data.battery_power >= 0:
             return True  # Discharging or idle — allow adjustment
         
-        expected_power = self._current_max_charge * battery_voltage
+        effective_amps = self._current_max_charge
+        bms_limit = getattr(data, "bms_charge_current_limit", 0) or 0
+        if bms_limit > 0:
+            # The inverter honours the BMS limit even when the register is higher.
+            effective_amps = min(effective_amps, bms_limit)
+        expected_power = effective_amps * battery_voltage
         actual_power = abs(data.battery_power)
         
         # Cap expected power at available generation — the inverter can't charge
@@ -1472,7 +1533,7 @@ class DeyeApp(ctk.CTk):
         # Check if actual power is within 10% of expected
         if abs(actual_power - expected_power) > expected_power * 0.10:
             print(f"[CHARGE] Waiting for inverter to settle: actual={actual_power}W vs expected={expected_power:.0f}W "
-                  f"({self._current_max_charge}A × {battery_voltage:.1f}V), diff={abs(actual_power - expected_power) / expected_power:.0%}")
+                  f"({effective_amps}A × {battery_voltage:.1f}V), diff={abs(actual_power - expected_power) / expected_power:.0%}")
             return False
         
         return True
@@ -1564,6 +1625,14 @@ class DeyeApp(ctk.CTk):
         max_charge_limit = deye_config.max_charge_amps_limit
         
         if needs_boost:
+            # Register 108 still cooling down from a previous write — don't
+            # accumulate boost state that can't reach the inverter yet.
+            if self.inverter.max_charge_cooldown_remaining() > 0:
+                self.after(0, lambda: self.protection_panel.update_protection_state(
+                    self._protection_active, self._protection_boost_amps
+                ))
+                return
+
             # Include any active sunset boost so protection's write doesn't
             # transiently clobber the sunset-driven charge target.
             sunset_boost = self._sunset_boost_amps if self._sunset_active else 0
@@ -1613,8 +1682,7 @@ class DeyeApp(ctk.CTk):
                 self._protection_active = True
                 self._last_protection_adjustment = current_time
                 target_charge = self._apply_charge_caps(
-                    base_charge + sunset_boost + self._protection_boost_amps,
-                    bms_limit=data.bms_charge_current_limit,
+                    base_charge + sunset_boost + self._protection_boost_amps
                 )
                 
                 step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
@@ -1633,8 +1701,7 @@ class DeyeApp(ctk.CTk):
                 # silent register desync (we think it's at max but the
                 # inverter is actually charging slower) gets corrected.
                 target_charge = self._apply_charge_caps(
-                    base_charge + sunset_boost + self._protection_boost_amps,
-                    bms_limit=data.bms_charge_current_limit,
+                    base_charge + sunset_boost + self._protection_boost_amps
                 )
                 # Only flag protection "active" when it's actually boosting.
                 # When sunset (or BMS) has consumed all available headroom and
@@ -1663,6 +1730,12 @@ class DeyeApp(ctk.CTk):
                     self._protection_active = False
                     self._last_protection_adjustment = current_time
             else:
+                if self.inverter.max_charge_cooldown_remaining() > 0:
+                    self.after(0, lambda: self.protection_panel.update_protection_state(
+                        self._protection_active, self._protection_boost_amps
+                    ))
+                    return
+
                 # Verify inverter has caught up before reducing further.
                 # Skip this check for SOC-forced recovery: near-full BMS throttles
                 # actual charge current well below the register value, so the
@@ -1686,8 +1759,7 @@ class DeyeApp(ctk.CTk):
                     self._last_protection_adjustment = current_time
                     sunset_boost = self._sunset_boost_amps if self._sunset_active else 0
                     target_charge = self._apply_charge_caps(
-                        base_charge + sunset_boost + self._protection_boost_amps,
-                        bms_limit=data.bms_charge_current_limit,
+                        base_charge + sunset_boost + self._protection_boost_amps
                     )
                     
                     step_type = "PROPORTIONAL" if proportional_step > charge_step else "STEP"
@@ -1748,9 +1820,14 @@ class DeyeApp(ctk.CTk):
 
         battery_voltage = data.battery_voltage if data.battery_voltage > 0 else 52.0
         is_exporting = data.grid_power < -min_export_w
+        # Max charge requests are capped at the BMS limit, so "high" is relative
+        # to whichever ceiling is lower.
+        charge_ceiling = deye_config.max_charge_amps_limit
+        if data.bms_charge_current_limit and data.bms_charge_current_limit > 0:
+            charge_ceiling = min(charge_ceiling, data.bms_charge_current_limit)
         charge_setting_high = (
             self._current_max_charge is not None
-            and self._current_max_charge >= deye_config.max_charge_amps_limit * min_charge_setting_pct / 100
+            and self._current_max_charge >= charge_ceiling * min_charge_setting_pct / 100
         )
         expected_charge_w = (self._current_max_charge or 0) * battery_voltage
         # Cap expected at available generation — includes PV + solar export from AC-coupled inverter
@@ -1798,7 +1875,8 @@ class DeyeApp(ctk.CTk):
             # Disable solar sell to prevent grid export
             sell_disabled = self.inverter.set_solar_sell(False)
             # Boost charging to max so battery absorbs AC-coupled inverter output
-            max_charge = deye_config.max_charge_amps_limit
+            # (capped at what the BMS will accept — more would be ignored anyway)
+            max_charge = self._apply_charge_caps(deye_config.max_charge_amps_limit)
             charge_boosted = False
             if self._current_max_charge != max_charge:
                 if self.inverter.set_max_charge_current(max_charge):
@@ -2214,6 +2292,7 @@ class DeyeApp(ctk.CTk):
                 data = self.inverter.read_data()
             
                 if data is not None:
+                    self._bms_charge_limit = data.bms_charge_current_limit or 0
                     self.after(0, self._update_dashboard, data)
                     self._process_logic(data)
                     # Process time-based charge schedule

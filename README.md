@@ -20,6 +20,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Voltage hold margin prevents premature recovery while voltage is still elevated
   - **At-cap re-assert** — when sunset/BMS has consumed all available headroom, the protection logic still defensively re-writes the target each interval to correct any silent inverter desync (panel correctly reports Standby when its own boost is 0)
   - Register write throttling to reduce inverter flash/EEPROM wear
+  - Max-charge requests never exceed the BMS charge limit (raise-only cap shared by schedule, sunset, protection and off-grid boost — a falling BMS limit never triggers a write)
   - Verifies inverter has caught up to current charge setting before adjusting further
 - 🌅 **Sunset-Aware Charging** - Dynamically adjusts charge rate throughout the day to reach target SOC by sunset:
   - Offline astronomical calculations via `astral` library (no internet needed)
@@ -142,6 +143,8 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
 | `DEYE_MODEL`                     | Inverter model name                                                                                                                                           |
 | `DEYE_ZERO_EXPORT_MODE`          | Zero export mode: 1 = Zero Export to Load (internal CT), 2 = Zero Export to CT (external CT)                                                                  |
 | `EXPORT_LEAK_PROTECTION_ENABLED` | Enable anti-export leak protection (default `true`). Set to `false` to test the inverter's native production→loads→sell→charge behavior without intervention. |
+| `DEYE_MIN_REGISTER_WRITE_INTERVAL` | Minimum seconds between writes to the same register, applied per register (default `600`). Reduces inverter flash/EEPROM wear; a write to one register never blocks another. |
+| `DEYE_REGISTER_WRITE_INTERVALS`  | Optional per-register overrides as `reg:seconds` pairs, e.g. `108:600,143:60`. Registers not listed use `DEYE_MIN_REGISTER_WRITE_INTERVAL`. |
 
 #### Inverter Power Limits (Model-Specific)
 

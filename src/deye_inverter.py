@@ -73,10 +73,25 @@ class DeyeInverter:
     STATUS_REGISTER_COUNT = 53  # Read up to register 552 for AC relay status
     
     # Write control registers are loaded from config (deye_config.reg_*)
+    REG_WORK_MODE = 142
     
     def __init__(self):
         self._modbus: Optional[PySolarmanV5] = None
-        self._write_cache: dict = {}  # {register: (value, timestamp)} - tracks last written value/time per register
+        self._write_cache: dict = {}  # {register: (value, timestamp)} - tracks last written value and time of last actual write per register
+        self._throttle_logged: dict = {}  # {register: timestamp} - rate-limits "Throttled" log lines
+
+    def write_cooldown_remaining(self, register: int) -> float:
+        """Seconds until the given register may be written again (0 if writable now)."""
+        import time
+        cached = self._write_cache.get(register)
+        if cached is None:
+            return 0.0
+        elapsed = time.time() - cached[1]
+        return max(0.0, deye_config.get_register_write_interval(register) - elapsed)
+
+    def max_charge_cooldown_remaining(self) -> float:
+        """Seconds until the max charge current register may be written again."""
+        return self.write_cooldown_remaining(deye_config.reg_max_charge_amps)
 
     def _connect(self) -> bool:
         """Establish connection to the inverter."""
@@ -358,15 +373,19 @@ class DeyeInverter:
         import time
         
         # Write throttle: skip if same value was recently written
-        min_interval = deye_config.min_register_write_interval
+        min_interval = deye_config.get_register_write_interval(register)
         if not force and register in self._write_cache:
             cached_value, cached_time = self._write_cache[register]
             if cached_value == value:
                 # Same value already written - skip entirely
                 return True
-            if time.time() - cached_time < min_interval:
+            elapsed = time.time() - cached_time
+            if elapsed < min_interval:
                 # Different value but too soon - skip to reduce flash wear
-                print(f"  [WRITE] Throttled: register {register} write deferred ({int(time.time() - cached_time)}s < {min_interval}s interval)")
+                now = time.time()
+                if now - self._throttle_logged.get(register, 0) >= 60:
+                    self._throttle_logged[register] = now
+                    print(f"  [WRITE] Throttled: register {register} write of {value} deferred ({int(elapsed)}s < {min_interval}s interval)")
                 return False
         
         for attempt in range(retries):
@@ -378,7 +397,10 @@ class DeyeInverter:
                 # Read current register value to avoid unnecessary writes
                 current = self._modbus.read_holding_registers(register, 1)
                 if current and current[0] == value:
-                    self._write_cache[register] = (value, time.time())
+                    # No physical write happened, so keep the previous write
+                    # timestamp — don't start a new cooldown window.
+                    prev_time = self._write_cache.get(register, (None, 0.0))[1]
+                    self._write_cache[register] = (value, prev_time)
                     return True
                 
                 print(f"  [WRITE] Writing {value} to register {register} (was {current[0] if current else '?'})...")
@@ -469,7 +491,7 @@ class DeyeInverter:
             True if successful, False otherwise
         """
         mode = max(0, min(2, mode))
-        return self._write_register(142, mode)
+        return self._write_register(self.REG_WORK_MODE, mode)
 
     def set_solar_sell(self, enabled: bool) -> bool:
         """

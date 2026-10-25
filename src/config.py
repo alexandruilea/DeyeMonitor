@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 from dotenv import load_dotenv
 
 
@@ -24,6 +24,21 @@ def get_app_path() -> Path:
 # Load environment variables from .env file
 _env_path = get_app_path() / ".env"
 load_dotenv(_env_path)
+
+
+def _parse_register_intervals(raw: str) -> Dict[int, int]:
+    """Parse "reg:seconds,reg:seconds" into {reg: seconds}; malformed entries are ignored."""
+    result: Dict[int, int] = {}
+    raw = raw.split("#", 1)[0]
+    for item in raw.split(","):
+        reg, sep, seconds = item.partition(":")
+        if not sep:
+            continue
+        try:
+            result[int(reg.strip())] = int(seconds.strip())
+        except ValueError:
+            print(f"[CONFIG] Ignoring invalid DEYE_REGISTER_WRITE_INTERVALS entry: {item!r}")
+    return result
 
 
 @dataclass
@@ -52,8 +67,13 @@ class DeyeConfig:
     sell_cutoff_power: int = field(default_factory=lambda: int(os.getenv("SCHEDULE_SELL_CUTOFF_POWER", "0")))  # Max sell power (W) sent to inverter when battery SOC <= min_batt_pct or during high load
     high_load_kw: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_KW", "6.0")))  # House load threshold that triggers sell cutoff & sunset pause (kW)
     high_load_hold_minutes: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_HOLD_MIN", "5.0")))  # Minutes load must stay above/below threshold
-    min_register_write_interval: int = field(default_factory=lambda: int(os.getenv("DEYE_MIN_REGISTER_WRITE_INTERVAL", "30")))  # Minimum seconds between writes to the same register (reduces flash wear)
+    min_register_write_interval: int = field(default_factory=lambda: int(os.getenv("DEYE_MIN_REGISTER_WRITE_INTERVAL", "600")))  # Default minimum seconds between writes to the same register (reduces flash wear)
+    register_write_intervals: Dict[int, int] = field(default_factory=lambda: _parse_register_intervals(os.getenv("DEYE_REGISTER_WRITE_INTERVALS", "")))  # Per-register overrides, e.g. "108:600,143:60"
     export_leak_protection_enabled: bool = field(default_factory=lambda: os.getenv("EXPORT_LEAK_PROTECTION_ENABLED", "true").lower() == "true")  # Force zero-export + sell OFF + max charge when inverter leaks PV to grid instead of charging the battery. Set to false to test the inverter's native production→loads→sell→charge behavior.
+
+    def get_register_write_interval(self, register: int) -> int:
+        """Minimum seconds between writes to the given register."""
+        return self.register_write_intervals.get(register, self.min_register_write_interval)
 
 
 @dataclass
