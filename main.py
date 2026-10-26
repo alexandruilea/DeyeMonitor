@@ -13,10 +13,11 @@ from datetime import datetime
 from typing import Optional
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, sunset_config, get_app_path
+from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, sunset_config, inverter_fan_config, OutletConfig, get_app_path
 from src.env_export import merge_env_text, build_numbered_lines
 from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
+from src.inverter_fan_logic import FanSettings, FanResult, decide_fan_state
 from src.ems_logic import EMSLogic, EMSParameters, LogicResult
 from src.tuya_charger import TuyaChargerManager
 from src.ev_logic import EVChargingLogic, EVSettings, EVResult
@@ -37,6 +38,7 @@ from src.ui_components import (
     SunsetChargingPanel,
     EVChargerPanel,
     HeatpumpPanel,
+    InverterFanPanel,
     BatteryStatsDialog,
 )
 
@@ -101,6 +103,19 @@ class DeyeApp(ctk.CTk):
         self._inverter_lock = threading.Lock()  # Serialize modbus access across threads
         self.tapo = TapoManager(error_callback=self._log_error)
         self.ems = EMSLogic(self.tapo)
+
+        # Inverter cooling fan (Tapo outlet), kept out of the EMS outlet cascade
+        self.fan_tapo = None
+        self._last_fan_result = None
+        if inverter_fan_config.ip:
+            fan_cfg = OutletConfig(
+                outlet_id=1, ip=inverter_fan_config.ip,
+                username=inverter_fan_config.username, password=inverter_fan_config.password,
+                name=inverter_fan_config.name, priority=1, power=0,
+            )
+            self.fan_tapo = TapoManager(error_callback=self._log_error, configs=[fan_cfg])
+            # Cooling is safety-related: keep retrying (60s max backoff) instead of giving up
+            self.fan_tapo.get_outlet(1)._max_retries = 10**9
         
         # Tuya heat pump outlet
         self.hp_manager = None
@@ -296,14 +311,25 @@ class DeyeApp(ctk.CTk):
         )
         self.lbl_load_consumption.grid(row=0, column=2, padx=10)
         
-        # Current charge settings display
+        # Current charge settings display + inverter temperature
+        charge_frame = ctk.CTkFrame(stats_frame, fg_color="transparent")
+        charge_frame.grid(row=0, column=3, padx=10, sticky="e")
+
         self.lbl_charge_settings = ctk.CTkLabel(
-            stats_frame,
+            charge_frame,
             text="Charge Limits: Max: --A | Grid: --A | Discharge: --A",
             font=("Roboto", 14, "bold"),
             text_color="#3498DB"
         )
-        self.lbl_charge_settings.grid(row=0, column=3, padx=10, sticky="e")
+        self.lbl_charge_settings.pack(side="left")
+
+        self.lbl_inverter_temp = ctk.CTkLabel(
+            charge_frame,
+            text=" | Inv: --°C",
+            font=("Roboto", 14, "bold"),
+            text_color="#888888"
+        )
+        self.lbl_inverter_temp.pack(side="left")
         
         # Time Schedule Panel (for charge scheduling)
         self.schedule_panel = TimeSchedulePanel(
@@ -366,6 +392,10 @@ class DeyeApp(ctk.CTk):
             on_manual_toggle=self._on_manual_toggle
         )
         self.settings.grid(row=12, column=0, columnspan=3, padx=20, pady=10, sticky="nsew")
+
+        # Inverter cooling fan panel
+        self.fan_panel = InverterFanPanel(self.scrollable, configured=self.fan_tapo is not None)
+        self.fan_panel.grid(row=13, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         
         # Outlet-specific settings panels
         self.outlet_settings = {}
@@ -2294,6 +2324,8 @@ class DeyeApp(ctk.CTk):
                 if data is not None:
                     self._bms_charge_limit = data.bms_charge_current_limit or 0
                     self.after(0, self._update_dashboard, data)
+                    # Inverter cooling fan first: safety-related and independent of the EMS logic below
+                    self._process_inverter_fan(data)
                     self._process_logic(data)
                     # Process time-based charge schedule
                     self._process_schedule(data)
@@ -2340,6 +2372,16 @@ class DeyeApp(ctk.CTk):
         
         # Update total load consumption per phase display
         self.lbl_load_consumption.configure(text=f"L1: {data.total_loads[0]}W L2: {data.total_loads[1]}W L3: {data.total_loads[2]}W")
+
+        # Update inverter temperature display (AC side drives the fan, DC shown for reference)
+        if data.ac_temperature is not None:
+            fan = self.fan_panel.get_settings()
+            ac = data.ac_temperature
+            color = "#E74C3C" if ac > fan["on_temp"] else "#F39C12" if ac >= fan["off_temp"] else "#2ECC71"
+            dc_str = f" DC {data.dc_temperature:.1f}°C" if data.dc_temperature is not None else ""
+            self.lbl_inverter_temp.configure(text=f" | Inv: AC {ac:.1f}°C{dc_str}", text_color=color)
+        else:
+            self.lbl_inverter_temp.configure(text=" | Inv: --°C", text_color="#888888")
 
         # Update EVSE offline status display
         is_ev_offline = self._is_ev_offline()
@@ -2534,6 +2576,13 @@ class DeyeApp(ctk.CTk):
             "EV_CHARGER_PHASES": ev["phases"],
         })
 
+        fan = section("Inverter Fan", lambda: self.fan_panel.get_settings(strict=True))
+        values.update({
+            "INVERTER_FAN_ENABLED": fan["enabled"],
+            "INVERTER_FAN_ON_TEMP": fan["on_temp"],
+            "INVERTER_FAN_OFF_TEMP": fan["off_temp"],
+        })
+
         outlets = self.tapo.get_all_outlets()
         for outlet_id, cfg_vars in self.outlet_cfg.items():
             outlet_cfg = outlets[outlet_id].config
@@ -2612,6 +2661,34 @@ class DeyeApp(ctk.CTk):
         is_invalid = EMSLogic.is_error_result(result)
         for outlet_panel in self.outlet_settings.values():
             self.after(0, lambda p=outlet_panel: p.set_invalid_config(is_invalid))
+
+    def _process_inverter_fan(self, data: InverterData) -> None:
+        """Run the inverter cooling fan with AC temperature hysteresis (called from background thread)."""
+        if self.fan_tapo is None:
+            return
+        fan = self.fan_tapo.get_outlet(1)
+        ui = self.fan_panel.get_settings()
+        settings = FanSettings(enabled=ui["enabled"], on_temp=ui["on_temp"], off_temp=ui["off_temp"])
+
+        desired, result, detail = decide_fan_state(
+            settings, data.ac_temperature, fan.current_state, fan_connected=fan.is_connected
+        )
+        if result == FanResult.TURN_ON:
+            self.fan_tapo.turn_on(1)
+        elif result == FanResult.TURN_OFF:
+            self.fan_tapo.turn_off(1)
+
+        # TURN_ON/OFF repeat until the outlet confirms, so log on transitions only
+        if result != self._last_fan_result:
+            self._last_fan_result = result
+            if result in (FanResult.TURN_ON, FanResult.TURN_OFF, FanResult.INVALID_CONFIG, FanResult.NO_DATA):
+                self._log_error(f"[{inverter_fan_config.name}] {result.value}" + (f" ({detail})" if detail else ""))
+
+        error = result in (FanResult.INVALID_CONFIG, FanResult.OFFLINE, FanResult.NO_DATA)
+        self.after(0, lambda: self.fan_panel.update_state(
+            connected=fan.is_connected, is_on=fan.current_state,
+            result_text=result.value, detail=detail, error=error,
+        ))
 
     def _process_heatpump(self, data: InverterData) -> None:
         """Process Tuya heat pump logic (called from background thread)."""

@@ -5,7 +5,7 @@ UI Components for Deye Inverter EMS application.
 import customtkinter as ctk
 from typing import List, Tuple, Callable, Optional
 
-from src.config import protection_config, charge_prioritization_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot
+from src.config import protection_config, charge_prioritization_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot, inverter_fan_config
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -2563,6 +2563,119 @@ class HeatpumpPanel(ctk.CTkFrame):
             "HP Disabled": "gray",
         }
         self.lbl_hp_result.configure(text=full, text_color=color_map.get(result_text, "#888888"))
+
+
+class InverterFanPanel(ctk.CTkFrame):
+    """
+    Panel for the Tapo outlet powering an external inverter cooling fan.
+
+    The fan runs when the inverter AC side (heat sink) temperature rises above
+    the ON threshold and stops once it falls below the OFF threshold.
+    """
+
+    def __init__(self, parent, configured: bool, on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
+        self.on_settings_change = on_settings_change
+        self.configured = configured
+
+        self.grid_columnconfigure(0, weight=1)
+
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            header_frame, text=f"🌀 {inverter_fan_config.name.upper()} (AC TEMP HYSTERESIS)",
+            font=("Roboto", 14, "bold"),
+            text_color="#1ABC9C"
+        ).grid(row=0, column=0, sticky="w")
+
+        self.enabled_var = ctk.BooleanVar(value=inverter_fan_config.enabled)
+        self.enable_switch = ctk.CTkSwitch(
+            header_frame, text="Enable Auto Fan",
+            variable=self.enabled_var,
+            font=("Roboto", 11, "bold"),
+            command=self._on_field_change
+        )
+        self.enable_switch.grid(row=0, column=1, padx=20)
+        if not configured:
+            self.enable_switch.configure(state="disabled")
+
+        self.lbl_status = ctk.CTkLabel(
+            header_frame,
+            text="Not configured (set INVERTER_FAN_IP in .env)" if not configured else "Waiting for data...",
+            font=("Roboto", 11),
+            text_color="gray"
+        )
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=10)
+
+        settings_frame = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        settings_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+
+        ctk.CTkLabel(
+            settings_frame, text="Fan ON above:",
+            font=("Roboto", 10, "bold"),
+            text_color="#E74C3C"
+        ).grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
+        self.on_temp = ctk.CTkEntry(settings_frame, width=60, justify="center")
+        self.on_temp.grid(row=0, column=1, padx=5, pady=8)
+        self.on_temp.insert(0, f"{inverter_fan_config.on_temp:g}")
+        self.on_temp.bind("<FocusOut>", self._on_field_change)
+        ctk.CTkLabel(settings_frame, text="°C", font=("Roboto", 10)).grid(row=0, column=2, padx=(0, 20), pady=8)
+
+        ctk.CTkLabel(
+            settings_frame, text="Fan OFF below:",
+            font=("Roboto", 10, "bold"),
+            text_color="#3498DB"
+        ).grid(row=0, column=3, padx=5, pady=8, sticky="w")
+        self.off_temp = ctk.CTkEntry(settings_frame, width=60, justify="center")
+        self.off_temp.grid(row=0, column=4, padx=5, pady=8)
+        self.off_temp.insert(0, f"{inverter_fan_config.off_temp:g}")
+        self.off_temp.bind("<FocusOut>", self._on_field_change)
+        ctk.CTkLabel(settings_frame, text="°C", font=("Roboto", 10)).grid(row=0, column=5, padx=(0, 20), pady=8)
+
+        self.lbl_fan_state = ctk.CTkLabel(
+            settings_frame, text="Fan: --",
+            font=("Roboto", 12, "bold"),
+            text_color="#888888"
+        )
+        self.lbl_fan_state.grid(row=0, column=6, padx=20, pady=8, sticky="w")
+
+    def _on_field_change(self, event=None) -> None:
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    def is_enabled(self) -> bool:
+        return self.configured and self.enabled_var.get()
+
+    def get_settings(self, strict: bool = False) -> dict:
+        """Get current settings (strict=True raises on invalid entries)."""
+        try:
+            on_temp = float(self.on_temp.get())
+            off_temp = float(self.off_temp.get())
+        except ValueError:
+            if strict:
+                raise
+            on_temp, off_temp = inverter_fan_config.on_temp, inverter_fan_config.off_temp
+        return {"enabled": self.enabled_var.get(), "on_temp": on_temp, "off_temp": off_temp}
+
+    def update_state(self, connected: bool, is_on: bool, result_text: str, detail: str, error: bool = False) -> None:
+        """Refresh fan state and logic status (call on the main thread)."""
+        if not connected:
+            self.lbl_fan_state.configure(text="Fan: Offline", text_color="#E74C3C")
+        elif is_on:
+            self.lbl_fan_state.configure(text="Fan: RUNNING", text_color="#1ABC9C")
+        else:
+            self.lbl_fan_state.configure(text="Fan: OFF", text_color="#888888")
+
+        full = f"{result_text}: {detail}" if detail else result_text
+        if error:
+            color = "#E74C3C"
+        elif not self.enabled_var.get():
+            color = "gray"
+        else:
+            color = "#1ABC9C" if is_on else "#2ECC71"
+        self.lbl_status.configure(text=full, text_color=color)
 
 
 class BatteryStatsDialog(ctk.CTkToplevel):

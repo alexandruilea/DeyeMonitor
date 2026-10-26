@@ -57,6 +57,8 @@ class InverterData:
     battery_voltage: float = 0.0  # Battery voltage (V) - register 587
     bms_charge_current_limit: int = 0  # BMS charge current limit (A) - register 212
     gen_port_power: int = 0  # Gen port total power (W) - register 667 (micro inverter when Gen=MI)
+    ac_temperature: Optional[float] = None  # Heat sink / AC side temperature (°C) - register 541
+    dc_temperature: Optional[float] = None  # DC transformer temperature (°C) - register 540
 
 
 class DeyeInverter:
@@ -111,6 +113,12 @@ class DeyeInverter:
     def _parse_signed(self, value: int) -> int:
         """Convert unsigned 16-bit register value to signed."""
         return value if value < 32768 else value - 65536
+
+    @staticmethod
+    def _parse_temperature(raw: int) -> Optional[float]:
+        """Convert a temperature register (0.1°C, offset 1000) to °C; None if implausible."""
+        temp = (raw - 1000) / 10.0
+        return temp if -40.0 <= temp <= 150.0 else None
 
     def read_data(self) -> Optional[InverterData]:
         """
@@ -167,7 +175,9 @@ class DeyeInverter:
                 running_state=status_raw[0],  # R0 of base 500: Running state
                 is_grid_connected=is_grid_connected,  # Bit2 of register 552
                 battery_voltage=battery_voltage,  # Register 587
-                bms_charge_current_limit=bms_charge_current_limit  # Register 212
+                bms_charge_current_limit=bms_charge_current_limit,  # Register 212
+                ac_temperature=self._parse_temperature(status_raw[41]),  # Register 541: heat sink (AC side)
+                dc_temperature=self._parse_temperature(status_raw[40]),  # Register 540: DC transformer
             )
             
             # Sanity check: reject corrupt/glitched reads that could trigger false actions

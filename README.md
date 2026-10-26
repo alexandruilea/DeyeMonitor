@@ -77,6 +77,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     - **Restart delay** — Configurable cooldown after off before auto-restart
     - **On-Grid Always On** — Keep outlets always on when grid is connected
     - **Manual override** — Direct on/off control from the UI
+- 🌀 **Inverter Cooling Fan** - Tapo outlet running an external inverter fan with configurable AC temperature hysteresis (e.g. ON above 49.5 °C, OFF below 45 °C); inverter AC/DC temperatures are shown in the top stats row
 - 📝 **Persistent File Logging** - All console output is duplicated to timestamped log files in a `logs/` directory for post-mortem analysis
 - 🔧 Fully configurable parameters via `.env` file
 
@@ -98,6 +99,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     ├── deye_inverter.py    # Deye inverter communication
     ├── ems_logic.py        # Energy management logic (Tapo outlets)
     ├── ev_logic.py         # EV smart charging decision engine
+    ├── inverter_fan_logic.py  # Inverter cooling fan temperature hysteresis
     ├── tapo_manager.py     # Tapo smart plug control
     ├── tuya_charger.py     # Tuya EV charger device manager
     ├── tuya_heatpump.py    # Tuya thermostat device manager
@@ -229,6 +231,20 @@ SCHEDULE_2=06:00-09:00,40,40,185,nosell,8000
 | `OUTLET_N_PASS`     | Tapo account password      |
 | `OUTLET_N_NAME`     | Display name in UI         |
 | `OUTLET_N_PRIORITY` | Priority (1=highest)       |
+
+#### Inverter Cooling Fan (Tapo)
+
+A Tapo outlet that powers an external inverter fan. It is switched with hysteresis on the inverter AC side (heat sink, register 541) temperature and is kept separate from the `OUTLET_N` cascade.
+
+| Variable                | Description                                              | Default          |
+| ----------------------- | -------------------------------------------------------- | ---------------- |
+| `INVERTER_FAN_IP`       | Tapo smart plug IP address (leave empty to disable)      | –                |
+| `INVERTER_FAN_USER`     | Tapo account email                                       | `OUTLET_1_USER`  |
+| `INVERTER_FAN_PASS`     | Tapo account password                                    | `OUTLET_1_PASS`  |
+| `INVERTER_FAN_NAME`     | Display name in UI                                       | Inverter Fan     |
+| `INVERTER_FAN_ENABLED`  | Enable automatic fan control at startup                  | false            |
+| `INVERTER_FAN_ON_TEMP`  | Fan turns ON when AC temperature rises above this (°C)   | 49.5             |
+| `INVERTER_FAN_OFF_TEMP` | Fan turns OFF when AC temperature drops below this (°C)  | 45.0             |
 
 #### TEV Smart Charger (Tuya)
 

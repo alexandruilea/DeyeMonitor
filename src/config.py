@@ -306,6 +306,18 @@ class TuyaHeatpumpConfig:
     target_phase: str = field(default_factory=lambda: os.getenv("HEATPUMP_TARGET_PHASE", "ANY"))  # Phase to monitor voltage (L1/L2/L3/ANY)
 
 
+@dataclass
+class InverterFanConfig:
+    """Tapo outlet powering an external inverter cooling fan, driven by AC (heat sink) temperature hysteresis."""
+    enabled: bool = field(default_factory=lambda: os.getenv("INVERTER_FAN_ENABLED", "false").lower() == "true")
+    ip: str = field(default_factory=lambda: os.getenv("INVERTER_FAN_IP", ""))
+    username: str = field(default_factory=lambda: os.getenv("INVERTER_FAN_USER", os.getenv("OUTLET_1_USER", "")))
+    password: str = field(default_factory=lambda: os.getenv("INVERTER_FAN_PASS", os.getenv("OUTLET_1_PASS", "")))
+    name: str = field(default_factory=lambda: os.getenv("INVERTER_FAN_NAME", "Inverter Fan"))
+    on_temp: float = field(default_factory=lambda: float(os.getenv("INVERTER_FAN_ON_TEMP", "49.5")))  # Fan ON when AC temp rises above this (°C)
+    off_temp: float = field(default_factory=lambda: float(os.getenv("INVERTER_FAN_OFF_TEMP", "45.0")))  # Fan OFF when AC temp drops below this (°C)
+
+
 def load_heatpump_schedules() -> list:
     """Load default heat pump temperature schedule slots from environment variables.
 
@@ -412,4 +424,5 @@ sunset_config = SunsetChargingConfig()
 ev_charger_config = EVChargerConfig()
 heatpump_config = TuyaHeatpumpConfig()
 heatpump_schedules = load_heatpump_schedules()
+inverter_fan_config = InverterFanConfig()
 default_schedules = load_default_schedules()

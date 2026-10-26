@@ -60,11 +60,12 @@ class TapoManager:
     Runs an async event loop in a background thread for non-blocking operation.
     """
     
-    def __init__(self, error_callback: Optional[Callable[[str], None]] = None):
-        # Create outlet devices from config
+    def __init__(self, error_callback: Optional[Callable[[str], None]] = None,
+                 configs: Optional[List[OutletConfig]] = None):
+        # Create outlet devices from config (defaults to the EMS outlets from .env)
         self.outlets: Dict[int, OutletDevice] = {
             cfg.outlet_id: OutletDevice(cfg) 
-            for cfg in outlet_configs
+            for cfg in (outlet_configs if configs is None else configs)
         }
         
         # Error callback for UI logging
