@@ -5,10 +5,30 @@ Supports multiple outlets with individual control.
 
 import asyncio
 import threading
+import time
 from typing import Optional, Dict, Callable, List
 from tapo import ApiClient
 
 from src.config import outlet_configs, OutletConfig
+
+# A plug allows one session at a time: another client logging in ends ours. Losing the
+# session this soon after logging in means another client keeps using the plug (e.g. a
+# second DeyeMonitor), so wait instead of taking it straight back in a login tug-of-war.
+SESSION_CONTENTION_SECONDS = 60
+CONTENTION_BACKOFF_SECONDS = 60
+CONTENTION_LOG_INTERVAL_SECONDS = 600
+
+
+def is_session_error(error_msg: str) -> bool:
+    """Expired session: the plug wants a fresh login, not a backoff.
+
+    tapo 0.8.8 says "SessionTimeout"; newer versions say
+    'Unauthorized { kind: "SESSION_TIMEOUT", description: "Session has expired..." }'.
+    Other Unauthorized kinds (wrong credentials) are not matched, so they keep the backoff.
+    """
+    text = error_msg.lower()
+    return any(marker in text for marker in ("sessiontimeout", "session_timeout", "session has expired",
+                                             "403", "forbidden"))
 
 
 class OutletDevice:
@@ -24,11 +44,15 @@ class OutletDevice:
         self._retry_count: int = 0  # Count connection retries
         self._permanent_failure: bool = False  # Stop retrying after too many failures
         self._max_retries: int = 10  # Maximum retry attempts before giving up
-    
+        self._connected_at: Optional[float] = None  # time.monotonic() of the last login
+        self._reconnect_after: float = 0.0  # No login before this (another client has the plug)
+        self._last_contention_log: Optional[float] = None
+
     async def connect(self) -> None:
         """Connect to the outlet device."""
         client = ApiClient(self.config.username, self.config.password)
         self.device = await client.p110(self.config.ip)
+        self._connected_at = time.monotonic()
     
     async def update_state(self) -> None:
         """Update the current state from the device."""
@@ -85,69 +109,91 @@ class TapoManager:
         """Main async task that continuously monitors and controls all devices."""
         while True:
             for outlet in self.outlets.values():
-                try:
-                    # Skip outlets that have permanently failed
-                    if outlet._permanent_failure:
-                        continue
-                    
-                    # Connect if not connected
-                    if outlet.device is None:
-                        # Check if we've exceeded max retries
-                        if outlet._retry_count >= outlet._max_retries:
-                            outlet._permanent_failure = True
-                            outlet.is_connected = False
-                            if self.error_callback and not outlet._last_error_logged:
-                                self.error_callback(f"[{outlet.config.name}] FAILED - Stopped retrying after {outlet._max_retries} attempts. Check configuration.")
-                                outlet._last_error_logged = True
-                            continue
-                        
-                        # Exponential backoff for offline outlets (max 60 seconds between attempts)
-                        if outlet._retry_count > 0:
-                            wait_time = min(2 ** outlet._retry_count, 60)
-                            if outlet._retry_count % (wait_time // 2) != 0:
-                                outlet._retry_count += 1
-                                continue
-                        
-                        await outlet.connect()
-                        outlet._retry_count = 0
-                        outlet._last_error_logged = False
-                    
-                    # Update device state
-                    await outlet.update_state()
-                    
-                    # Apply target state if set
-                    await outlet.apply_target_state()
-                    
-                    # Reset retry count on success
-                    outlet._retry_count = 0
-                    outlet._last_error_logged = False
-                    outlet._permanent_failure = False  # Reset permanent failure on successful connection
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    
-                    # Check if it's a session timeout or auth error (403 Forbidden)
-                    is_session_error = "SessionTimeout" in error_msg or "403" in error_msg or "Forbidden" in error_msg
-                    
-                    # Force reconnection on session errors
-                    if is_session_error:
-                        outlet.device = None
-                        if self.error_callback and not outlet._last_error_logged:
-                            self.error_callback(f"[{outlet.config.name}] Session expired, reconnecting...")
-                    else:
-                        # Only log error once when state changes from connected to disconnected
-                        if not outlet._last_error_logged:
-                            error_summary = error_msg[:100] if len(error_msg) > 100 else error_msg
-                            if self.error_callback:
-                                self.error_callback(f"[{outlet.config.name}] Offline: {error_summary}")
-                            outlet._last_error_logged = True
-                    
-                    outlet.is_connected = False
-                    if not is_session_error:
-                        outlet.device = None
-                        outlet._retry_count += 1
-                
+                await self._poll_outlet(outlet)
             await asyncio.sleep(2)
+
+    async def _poll_outlet(self, outlet: OutletDevice) -> None:
+        """One cycle for one outlet: connect if needed, read its state, apply a pending on/off."""
+        try:
+            # Skip outlets that have permanently failed
+            if outlet._permanent_failure:
+                return
+
+            # Connect if not connected
+            if outlet.device is None:
+                # Another client had the plug moments after our last login: let it be for a while
+                if time.monotonic() < outlet._reconnect_after:
+                    return
+
+                # Check if we've exceeded max retries
+                if outlet._retry_count >= outlet._max_retries:
+                    outlet._permanent_failure = True
+                    outlet.is_connected = False
+                    if self.error_callback and not outlet._last_error_logged:
+                        self.error_callback(f"[{outlet.config.name}] FAILED - Stopped retrying after {outlet._max_retries} attempts. Check configuration.")
+                        outlet._last_error_logged = True
+                    return
+
+                # Exponential backoff for offline outlets (max 60 seconds between attempts)
+                if outlet._retry_count > 0:
+                    wait_time = min(2 ** outlet._retry_count, 60)
+                    if outlet._retry_count % (wait_time // 2) != 0:
+                        outlet._retry_count += 1
+                        return
+
+                await outlet.connect()
+                outlet._retry_count = 0
+                outlet._last_error_logged = False
+
+            # Update device state
+            await outlet.update_state()
+
+            # Apply target state if set
+            await outlet.apply_target_state()
+
+            # Reset retry count on success
+            outlet._retry_count = 0
+            outlet._last_error_logged = False
+            outlet._permanent_failure = False  # Reset permanent failure on successful connection
+
+        except Exception as e:
+            error_msg = str(e)
+
+            # Force reconnection on session errors (expired session, 403 Forbidden)
+            session_error = is_session_error(error_msg)
+            if session_error:
+                outlet.device = None
+                self._on_session_lost(outlet)
+            else:
+                # Only log error once when state changes from connected to disconnected
+                if not outlet._last_error_logged:
+                    error_summary = error_msg[:100] if len(error_msg) > 100 else error_msg
+                    if self.error_callback:
+                        self.error_callback(f"[{outlet.config.name}] Offline: {error_summary}")
+                    outlet._last_error_logged = True
+
+            outlet.is_connected = False
+            if not session_error:
+                outlet.device = None
+                outlet._retry_count += 1
+
+    def _on_session_lost(self, outlet: OutletDevice) -> None:
+        """Reconnect at once after a normal expiry; back off when another client keeps taking the plug."""
+        now = time.monotonic()
+        held_for = None if outlet._connected_at is None else now - outlet._connected_at
+        if held_for is None or held_for >= SESSION_CONTENTION_SECONDS:
+            if self.error_callback and not outlet._last_error_logged:
+                self.error_callback(f"[{outlet.config.name}] Session expired, reconnecting...")
+            return
+
+        outlet._reconnect_after = now + CONTENTION_BACKOFF_SECONDS
+        if outlet._last_contention_log is None or now - outlet._last_contention_log >= CONTENTION_LOG_INTERVAL_SECONDS:
+            outlet._last_contention_log = now
+            if self.error_callback:
+                self.error_callback(
+                    f"[{outlet.config.name}] Lost the session {int(held_for)}s after logging in: another client is "
+                    f"logging in to this plug, which allows one session at a time (a second DeyeMonitor running?). "
+                    f"Retrying every {CONTENTION_BACKOFF_SECONDS}s")
 
     def turn_on(self, outlet_id: int) -> None:
         """Request to turn on a specific outlet."""

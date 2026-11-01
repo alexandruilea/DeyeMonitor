@@ -3,9 +3,17 @@ UI Components for Deye Inverter EMS application.
 """
 
 import customtkinter as ctk
-from typing import List, Tuple, Callable, Optional
+from datetime import datetime
+from typing import List, Tuple, Callable, Optional, TYPE_CHECKING
 
-from src.config import protection_config, charge_prioritization_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot, inverter_fan_config
+from src.config import protection_config, charge_prioritization_config, deye_config, sunset_config, ev_charger_config, default_schedules, heatpump_config, heatpump_schedules, HeatpumpScheduleSlot, inverter_fan_config, MGCarConfig
+from src.mg_logic import (
+    ACHIEVE_CHECK, ACHIEVE_MAX, ACHIEVE_TOLERANCE, ACTION_LABELS, MGAction, MGSchedule, SeatSupport, WEEKDAYS,
+    climate_name,
+)
+
+if TYPE_CHECKING:
+    from src.mg_car import MGCarState
 
 # Default charge current limits (Amps) - loaded from config
 DEFAULT_MAX_CHARGE_AMPS = deye_config.default_max_charge_amps
@@ -951,9 +959,10 @@ class ChargePrioritizationPanel(ctk.CTkFrame):
     """
     Panel for configuring charge prioritization via Time of Use target SOC.
     
-    When the inverter is selling power while boost algorithms (battery boost protection
-    or sunset charging) require heavy charging, this feature raises the current TOU
-    interval's charge target to prioritize battery charging.
+    When the inverter is selling power while heavy charging is required (battery boost
+    protection, sunset charging, or the active interval's Max Charge at the hardware
+    limit), this feature raises the current TOU interval's charge target to prioritize
+    battery charging.
     If solar is lost and the system pulls > 500W from the grid for sustained time,
     it lowers the target back down.
     """
@@ -2676,6 +2685,256 @@ class InverterFanPanel(ctk.CTkFrame):
         else:
             color = "#1ABC9C" if is_on else "#2ECC71"
         self.lbl_status.configure(text=full, text_color=color)
+
+
+class MGCarPanel(ctk.CTkFrame):
+    """
+    Panel for one MG car (SAIC iSmart cloud): the climate temperature, four action
+    buttons, and a daily schedule that runs one of the actions.
+
+    Climate only works on a locked car, so the app locks the car first when it
+    reports being unlocked. "Achieve temperature" restarts the climate until the
+    cabin reaches the set temperature (the car stops it after about 10 minutes).
+    """
+
+    ACTION_BUTTONS = (
+        (MGAction.CLIMATE, "#E67E22", "#CA6F1E"),
+        (MGAction.CLIMATE_DRIVER_SEAT, "#D35400", "#A04000"),
+        (MGAction.CLIMATE_BOTH_SEATS, "#C0392B", "#922B21"),
+        (MGAction.ALL_OFF, "#555555", "#444444"),
+    )
+    SEAT_ACTIONS = (MGAction.CLIMATE_DRIVER_SEAT, MGAction.CLIMATE_BOTH_SEATS)
+
+    def __init__(self, parent, config: MGCarConfig, on_action: Callable[[MGAction], None],
+                 on_settings_change: Callable = None, **kwargs):
+        super().__init__(parent, fg_color="#1E1E1E", corner_radius=10, border_width=1, border_color="#333333", **kwargs)
+        self.config = config
+        self.on_action = on_action
+        self.on_settings_change = on_settings_change
+        self._shown: dict = {}  # Last options per widget, to skip unchanged updates
+        self.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        header.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            header, text=f"🚗 {config.name.upper()} (MG iSMART)",
+            font=("Roboto", 14, "bold"),
+            text_color="#5DADE2"
+        ).grid(row=0, column=0, sticky="w")
+
+        self.lbl_car = ctk.CTkLabel(header, text="Connecting...", font=("Roboto", 11), text_color="gray")
+        self.lbl_car.grid(row=0, column=2, sticky="e", padx=10)
+
+        self.lbl_status = ctk.CTkLabel(
+            self, text="Battery: -- | Climate: -- | Lock: --",
+            font=("Roboto", 12, "bold"),
+            text_color="#888888", anchor="w"
+        )
+        self.lbl_status.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 5))
+
+        # ── Temperature + action buttons ────────────────────────────
+        controls = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        controls.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
+
+        ctk.CTkLabel(controls, text="Temp:", font=("Roboto", 10, "bold")).grid(row=0, column=0, padx=(10, 5), pady=8)
+        self.temperature = ctk.CTkEntry(controls, width=50, justify="center")
+        self.temperature.grid(row=0, column=1, pady=8)
+        self.temperature.insert(0, str(config.temperature))
+        self.temperature.bind("<FocusOut>", self._on_field_change)
+        ctk.CTkLabel(controls, text="°C", font=("Roboto", 10)).grid(row=0, column=2, padx=(2, 15), pady=8)
+
+        self.achieve_temp = ctk.BooleanVar(value=config.achieve_temperature)
+        ctk.CTkSwitch(
+            controls, text="Achieve temperature", variable=self.achieve_temp,
+            font=("Roboto", 10, "bold"), command=self._on_field_change
+        ).grid(row=0, column=3, padx=(0, 10), pady=8)
+
+        self.action_buttons = {}
+        for col, (action, color, hover) in enumerate(self.ACTION_BUTTONS, start=4):
+            btn = ctk.CTkButton(
+                controls, text=ACTION_LABELS[action], width=170, height=30,
+                fg_color=color, hover_color=hover,
+                font=("Roboto", 11, "bold"),
+                command=lambda a=action: self.on_action(a)
+            )
+            btn.grid(row=0, column=col, padx=5, pady=8)
+            self.action_buttons[action] = btn
+
+        self.lbl_achieve = ctk.CTkLabel(controls, text="", font=("Roboto", 10), text_color="gray", anchor="w")
+        self.lbl_achieve.grid(row=1, column=0, columnspan=8, sticky="w", padx=10, pady=(0, 6))
+
+        # ── Daily schedule ──────────────────────────────────────────
+        sched = ctk.CTkFrame(self, fg_color="#2B2B2B", corner_radius=5)
+        sched.grid(row=3, column=0, sticky="ew", padx=10, pady=5)
+        s = config.schedule
+
+        self.schedule_enabled = ctk.BooleanVar(value=s.enabled)
+        ctk.CTkSwitch(
+            sched, text="Schedule", variable=self.schedule_enabled,
+            font=("Roboto", 11, "bold"), command=self._on_field_change
+        ).grid(row=0, column=0, padx=(10, 15), pady=8)
+
+        ctk.CTkLabel(sched, text="At:", font=("Roboto", 10)).grid(row=0, column=1, padx=(0, 2))
+        self.sched_hour = ctk.CTkEntry(sched, width=40, justify="center", placeholder_text="HH")
+        self.sched_hour.grid(row=0, column=2)
+        self.sched_hour.insert(0, f"{s.hour:02d}")
+        self.sched_hour.bind("<FocusOut>", self._on_field_change)
+        ctk.CTkLabel(sched, text=":", font=("Roboto", 10, "bold")).grid(row=0, column=3)
+        self.sched_min = ctk.CTkEntry(sched, width=40, justify="center", placeholder_text="MM")
+        self.sched_min.grid(row=0, column=4)
+        self.sched_min.insert(0, f"{s.minute:02d}")
+        self.sched_min.bind("<FocusOut>", self._on_field_change)
+
+        days_frame = ctk.CTkFrame(sched, fg_color="transparent")
+        days_frame.grid(row=0, column=5, padx=10)
+        self.day_vars = []
+        for d, name in enumerate(WEEKDAYS):
+            var = ctk.BooleanVar(value=d in s.days)
+            ctk.CTkCheckBox(
+                days_frame, text=name, variable=var, width=52,
+                checkbox_width=16, checkbox_height=16,
+                font=("Roboto", 10), command=self._on_field_change
+            ).grid(row=0, column=d, padx=1)
+            self.day_vars.append(var)
+
+        self.sched_action = ctk.StringVar(value=ACTION_LABELS[s.action])
+        ctk.CTkOptionMenu(
+            sched, values=[ACTION_LABELS[a] for a in MGAction],
+            variable=self.sched_action, width=170, height=24,
+            font=("Roboto", 10), command=self._on_field_change
+        ).grid(row=0, column=6, padx=5)
+
+        self.sched_windshield = ctk.BooleanVar(value=s.windshield)
+        ctk.CTkCheckBox(
+            sched, text="Windshield defrost", variable=self.sched_windshield,
+            checkbox_width=16, checkbox_height=16,
+            font=("Roboto", 10), command=self._on_field_change
+        ).grid(row=0, column=7, padx=5)
+        self.sched_rear = ctk.BooleanVar(value=s.rear_defrost)
+        ctk.CTkCheckBox(
+            sched, text="Rear defroster", variable=self.sched_rear,
+            checkbox_width=16, checkbox_height=16,
+            font=("Roboto", 10), command=self._on_field_change
+        ).grid(row=0, column=8, padx=(5, 10))
+
+        self.lbl_next = ctk.CTkLabel(sched, text="", font=("Roboto", 10), text_color="gray")
+        self.lbl_next.grid(row=1, column=0, columnspan=9, sticky="w", padx=10, pady=(0, 6))
+
+        self.lbl_result = ctk.CTkLabel(self, text="", font=("Roboto", 11), text_color="gray", anchor="w")
+        self.lbl_result.grid(row=4, column=0, sticky="ew", padx=15, pady=(0, 8))
+
+    def _on_field_change(self, *_) -> None:
+        if self.on_settings_change:
+            self.on_settings_change()
+
+    def get_temperature(self, strict: bool = False) -> int:
+        """Climate temperature in °C (strict=True raises on an invalid entry)."""
+        try:
+            value = int(self.temperature.get().strip())
+            if not 16 <= value <= 31:
+                raise ValueError(f"temperature {value}°C is outside 16-31°C")
+            return value
+        except ValueError:
+            if strict:
+                raise
+            return self.config.temperature
+
+    def get_achieve_temperature(self) -> bool:
+        return self.achieve_temp.get()
+
+    def get_schedule(self, strict: bool = False) -> Optional[MGSchedule]:
+        """Schedule from the fields; None for an invalid time (strict=True raises instead)."""
+        try:
+            hour, minute = int(self.sched_hour.get()), int(self.sched_min.get())
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError(f"schedule time {hour}:{minute:02d} is out of range")
+        except ValueError:
+            if strict:
+                raise
+            return None
+        action = next(a for a, label in ACTION_LABELS.items() if label == self.sched_action.get())
+        return MGSchedule(
+            enabled=self.schedule_enabled.get(),
+            hour=hour, minute=minute,
+            days=frozenset(d for d, var in enumerate(self.day_vars) if var.get()),
+            action=action,
+            windshield=self.sched_windshield.get(),
+            rear_defrost=self.sched_rear.get(),
+        )
+
+    def _show(self, widget, **options) -> None:
+        """configure() only when something changed (this runs every second)."""
+        if self._shown.get(id(widget)) != options:
+            self._shown[id(widget)] = options
+            widget.configure(**options)
+
+    def update_state(self, state: "MGCarState") -> None:
+        """Refresh from a manager state snapshot (call on the main thread)."""
+        if state.logged_in:
+            self._show(self.lbl_car, text=state.car_label, text_color="#2ECC71")
+        elif state.backoff_until:
+            self._show(self.lbl_car, text=f"Logged out by the iSmart app - background login after {state.backoff_until:%H:%M}",
+                       text_color="#F39C12")
+        else:
+            self._show(self.lbl_car, text=state.car_label or "Not logged in", text_color="gray")
+
+        parts = [f"Battery: {state.battery_pct}%" if state.battery_pct is not None else "Battery: --",
+                 f"Climate: {climate_name(state.climate)}",
+                 {True: "Locked", False: "Unlocked"}.get(state.locked, "Lock: --")]
+        if state.seat_support not in (None, SeatSupport.NONE) and state.seat_left is not None:
+            parts.append(f"Seats L/R: {state.seat_left}/{state.seat_right}")
+        if state.rear_window_heat:
+            parts.append("Rear defroster on")
+        if state.cabin_temp is not None:
+            parts.append(f"Cabin: {state.cabin_temp}°C")
+        if state.status_time:
+            parts.append(f"as of {state.status_time:%H:%M}")
+        self._show(self.lbl_status, text=" | ".join(parts),
+                   text_color="#E67E22" if state.climate else "#AAB7B8")
+
+        busy = bool(state.busy)
+        no_seats = state.seat_support == SeatSupport.NONE
+        for action, btn in self.action_buttons.items():
+            disabled = busy or (no_seats and action in self.SEAT_ACTIONS)
+            self._show(btn, state="disabled" if disabled else "normal")
+
+        if busy:
+            self._show(self.lbl_result, text=f"⏳ {state.busy}", text_color="#F1C40F")
+        elif state.result:
+            self._show(self.lbl_result, text=state.result, text_color="#2ECC71" if state.result_ok else "#E74C3C")
+
+        job = state.achieve
+        if job:
+            verb = "Heating" if job.heating else "Cooling"
+            reading = f" (cabin {job.cabin_temp}°C at {job.cabin_time:%H:%M})" if job.cabin_temp is not None else ""
+            restarts = f", restarted {job.restarts}x" if job.restarts else ""
+            self._show(self.lbl_achieve, text=f"🎯 {verb} to {job.target}°C{reading}: next check {job.next_check:%H:%M}"
+                                              f"{restarts}, no restarts after {job.deadline:%H:%M}",
+                       text_color="#5DADE2")
+        elif self.achieve_temp.get():
+            self._show(self.lbl_achieve,
+                       text=f"Achieve temperature on: {int(ACHIEVE_CHECK.total_seconds() // 60)} min after each "
+                            f"climate start the app checks the cabin and restarts the climate until it is within "
+                            f"{ACHIEVE_TOLERANCE}°C of the set temperature (for up to "
+                            f"{int(ACHIEVE_MAX.total_seconds() // 60)} min)",
+                       text_color="gray")
+        else:
+            self._show(self.lbl_achieve, text="Achieve temperature off: the car stops the climate after about 10 minutes",
+                       text_color="gray")
+
+        schedule = self.get_schedule()
+        if schedule is None:
+            self._show(self.lbl_next, text="Invalid schedule time", text_color="#E74C3C")
+        elif not schedule.enabled:
+            self._show(self.lbl_next, text="Schedule off", text_color="gray")
+        elif state.next_schedule is None:
+            self._show(self.lbl_next, text="Schedule on, but no days selected", text_color="#F39C12")
+        else:
+            when = "running now" if state.next_schedule <= datetime.now() else f"next run {state.next_schedule:%a %d %b %H:%M}"
+            note = " (no remote seat heating on this car, seats skipped)" if no_seats and schedule.action in self.SEAT_ACTIONS else ""
+            self._show(self.lbl_next, text=f"Schedule {when}{note}", text_color="#5DADE2")
 
 
 class BatteryStatsDialog(ctk.CTkToplevel):

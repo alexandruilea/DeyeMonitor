@@ -48,3 +48,8 @@ Thumbs.db
 DeyeMonitor.zip
 dist_linux/
 logs/
+
+# Tuya device dumps (contain local keys)
+tinytuya.json
+devices.json
+tuya-raw.json

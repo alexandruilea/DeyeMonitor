@@ -17,3 +17,6 @@ astral>=3.2
 
 # Tuya Local Device Control (EV Charger)
 tinytuya>=1.13.0
+
+# MG car control (SAIC iSmart cloud API, needs Python 3.12+)
+saic-ismart-client-ng>=0.13.1

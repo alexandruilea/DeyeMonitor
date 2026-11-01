@@ -1,0 +1,20 @@
+# Secrets and local device dumps
+.env
+.env.saved
+tinytuya.json
+devices.json
+tuya-raw.json
+snapshot.json
+
+# Local environments, VCS and build output
+.git
+.vs
+.vscode
+.venv
+venv
+__pycache__
+**/__pycache__
+build
+dist
+dist_linux
+logs

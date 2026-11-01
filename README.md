@@ -20,7 +20,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
   - Voltage hold margin prevents premature recovery while voltage is still elevated
   - **At-cap re-assert** — when sunset/BMS has consumed all available headroom, the protection logic still defensively re-writes the target each interval to correct any silent inverter desync (panel correctly reports Standby when its own boost is 0)
   - Register write throttling to reduce inverter flash/EEPROM wear
-  - Max-charge requests never exceed the BMS charge limit (raise-only cap shared by schedule, sunset, protection and off-grid boost — a falling BMS limit never triggers a write)
+  - No max-charge write while the register already meets the BMS charge limit — the inverter never charges faster than the BMS allows, so the write would be wasted (shared by schedule, sunset, protection and off-grid boost). When the register is below the BMS limit the full target is written, so a rising BMS limit needs no further write
   - Verifies inverter has caught up to current charge setting before adjusting further
 - 🌅 **Sunset-Aware Charging** - Dynamically adjusts charge rate throughout the day to reach target SOC by sunset:
   - Offline astronomical calculations via `astral` library (no internet needed)
@@ -78,6 +78,7 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     - **On-Grid Always On** — Keep outlets always on when grid is connected
     - **Manual override** — Direct on/off control from the UI
 - 🌀 **Inverter Cooling Fan** - Tapo outlet running an external inverter fan with configurable AC temperature hysteresis (e.g. ON above 49.5 °C, OFF below 45 °C); inverter AC/DC temperatures are shown in the top stats row
+- 🚗 **MG Car Climate** - Remote climate for MG cars through the SAIC iSmart cloud: Climate / Climate + Driver Seat / Climate + Both Seats / All Off buttons with a temperature setting, plus a daily schedule (weekdays, time, windshield and rear defrost) and an "achieve temperature" switch that restarts the climate until the cabin gets there. Locks the car first when needed, since climate only works on a locked car
 - 📝 **Persistent File Logging** - All console output is duplicated to timestamped log files in a `logs/` directory for post-mortem analysis
 - 🔧 Fully configurable parameters via `.env` file
 
@@ -100,6 +101,8 @@ A professional Energy Management System for Deye inverters with Tapo smart plug 
     ├── ems_logic.py        # Energy management logic (Tapo outlets)
     ├── ev_logic.py         # EV smart charging decision engine
     ├── inverter_fan_logic.py  # Inverter cooling fan temperature hysteresis
+    ├── mg_car.py           # MG car control over the SAIC iSmart cloud
+    ├── mg_logic.py         # MG command planning and schedule timing
     ├── tapo_manager.py     # Tapo smart plug control
     ├── tuya_charger.py     # Tuya EV charger device manager
     ├── tuya_heatpump.py    # Tuya thermostat device manager
@@ -245,6 +248,36 @@ A Tapo outlet that powers an external inverter fan. It is switched with hysteres
 | `INVERTER_FAN_ENABLED`  | Enable automatic fan control at startup                  | false            |
 | `INVERTER_FAN_ON_TEMP`  | Fan turns ON when AC temperature rises above this (°C)   | 49.5             |
 | `INVERTER_FAN_OFF_TEMP` | Fan turns OFF when AC temperature drops below this (°C)  | 45.0             |
+
+#### MG Cars (SAIC iSmart)
+
+Each car gets a panel with a temperature box and four buttons: **Climate**, **Climate + Driver Seat**, **Climate + Both Seats** and **All Off**. A button press reads the car's live status first. If the car is unlocked, the app locks it before starting the climate, because SAIC only accepts climate commands for a locked car. About 15 s after the last command, the app reads the status back and reports anything that didn't take effect. Seat buttons are disabled on cars without remote seat heating (SAIC's `HeatedSeat` model setting), such as the ZS EV.
+
+The **Schedule** row runs one of the buttons on the selected days at a set time, using the panel's temperature. It can also turn on the windshield defrost (a climate mode with maximum fan on the windshield, which ignores the temperature) and the rear defroster. A schedule still runs up to 15 minutes late and retries a failed attempt every 3 minutes within that window.
+
+The car stops remote climate after about 10 minutes. With the **Achieve temperature** switch on, the app reads the cabin temperature 9 minutes after a button or the schedule started the climate, just before the car stops it. The S9 stops reporting the cabin temperature once the climate is off, so when the car sends no reading, the app uses the last one it got while the climate was running. If the cabin is more than 1 °C away from the set temperature and the climate has stopped, the app starts the climate again (with the same seats) and checks again 9 minutes later. While the car still reports the climate running, it checks every minute. It stops when the cabin gets there, when the car is unlocked (someone is at the car), when another button is pressed, when the switch is turned off, or 60 minutes after the first start. Restarts don't repeat the windshield and rear defrosters: they run once, with the first start. It cools down to the set temperature the same way when the cabin starts out warmer than it.
+
+The car itself limits remote starts: after a few remote climate runs in a row (MG owners report two), it refuses remote commands with "Too frequent operations. Please use the physical key to restart the vehicle..." until someone switches it on with the key. Driving the car resets this, so it normally only matters on days the car isn't used, and it caps achieve temperature at about one restart. The app shows the refusal with that advice, ends the auto-restart, and doesn't retry the schedule that day, because retrying can't succeed until someone uses the key.
+
+SAIC allows one login per account: logging in here logs that account out of the iSmart phone app, and the other way round. Give each car an account nobody uses on their phone, for example a second account the owner shared the car with. When the phone takes the session, the 10-minute background status refresh waits 30 minutes before logging in again; buttons and the schedule log in straight away.
+
+| Variable                         | Description                                                               | Default             |
+| -------------------------------- | ------------------------------------------------------------------------- | ------------------- |
+| `MG_CAR_N_USER`                  | iSmart account email (or phone number); N = 1, 2, ...                     | –                   |
+| `MG_CAR_N_PASS`                  | iSmart account password                                                   | –                   |
+| `MG_CAR_N_NAME`                  | Display name in UI                                                        | MG Car N            |
+| `MG_CAR_N_PHONE_COUNTRY_CODE`    | Country code, only when `MG_CAR_N_USER` is a phone number                 | –                   |
+| `MG_CAR_N_VIN`                   | Last VIN digits, only when the account has several cars                   | –                   |
+| `MG_CAR_N_TEMP`                  | Climate temperature (°C)                                                  | 22                  |
+| `MG_CAR_N_ACHIEVE_TEMP`          | Restart the climate until the cabin reaches `MG_CAR_N_TEMP`               | false               |
+| `MG_CAR_N_SCHEDULE_ENABLED`      | Run the daily schedule                                                    | false               |
+| `MG_CAR_N_SCHEDULE_TIME`         | Time of day (HH:MM)                                                       | 07:00               |
+| `MG_CAR_N_SCHEDULE_DAYS`         | Days, e.g. `Mon,Tue,Wed,Thu,Fri`                                          | Mon,Tue,Wed,Thu,Fri |
+| `MG_CAR_N_SCHEDULE_ACTION`       | `climate`, `climate_driver`, `climate_both` or `off`                      | climate             |
+| `MG_CAR_N_SCHEDULE_WINDSHIELD`   | Windshield defrost mode instead of normal climate                         | false               |
+| `MG_CAR_N_SCHEDULE_REAR_DEFROST` | Also turn on the rear window defroster                                    | false               |
+
+`python tests/test_mg.py` checks an account without the app: it logs in, lists the cars and reads their status, and can also send test commands (`--help` lists them).
 
 #### TEV Smart Charger (Tuya)
 

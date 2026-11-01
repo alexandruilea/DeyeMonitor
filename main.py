@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 import customtkinter as ctk
 
-from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, sunset_config, inverter_fan_config, OutletConfig, get_app_path
+from src.config import ems_defaults, deye_config, protection_config, ev_charger_config, heatpump_config, sunset_config, inverter_fan_config, mg_car_configs, OutletConfig, get_app_path
 from src.env_export import merge_env_text, build_numbered_lines
 from src.deye_inverter import DeyeInverter, InverterData, BMSData
 from src.tapo_manager import TapoManager
@@ -24,6 +24,8 @@ from src.ev_logic import EVChargingLogic, EVSettings, EVResult
 from src.tuya_heatpump import TuyaHeatpumpManager
 from src.tuya_heatpump_logic import HeatpumpLogic, HeatpumpSettings, HeatpumpResult
 from src.weather_forecast import WeatherForecast
+from src.mg_car import MGCarManager
+from src.mg_logic import MGAction, MGRequest, format_days
 from src.ui_components import (
     PhaseDisplay,
     SettingsPanel,
@@ -39,6 +41,7 @@ from src.ui_components import (
     EVChargerPanel,
     HeatpumpPanel,
     InverterFanPanel,
+    MGCarPanel,
     BatteryStatsDialog,
 )
 
@@ -51,7 +54,13 @@ class TeeWriter:
 
     def write(self, text):
         if text:
-            self.original.write(text)
+            try:
+                self.original.write(text)
+            except UnicodeEncodeError:
+                # Non-UTF-8 console/pipe (e.g. cp1252): degrade the console copy instead of
+                # raising into the calling thread (would kill the control loop)
+                enc = getattr(self.original, "encoding", None) or "ascii"
+                self.original.write(text.encode(enc, errors="replace").decode(enc))
             try:
                 self.log_file.write(text)
                 self.log_file.flush()
@@ -116,7 +125,10 @@ class DeyeApp(ctk.CTk):
             self.fan_tapo = TapoManager(error_callback=self._log_error, configs=[fan_cfg])
             # Cooling is safety-related: keep retrying (60s max backoff) instead of giving up
             self.fan_tapo.get_outlet(1)._max_retries = 10**9
-        
+
+        # MG cars (SAIC iSmart cloud), one manager per MG_CAR_N account
+        self.mg_cars = {cfg.car_id: MGCarManager(cfg, error_callback=self._log_error) for cfg in mg_car_configs}
+
         # Tuya heat pump outlet
         self.hp_manager = None
         self.hp_logic = None
@@ -396,13 +408,27 @@ class DeyeApp(ctk.CTk):
         # Inverter cooling fan panel
         self.fan_panel = InverterFanPanel(self.scrollable, configured=self.fan_tapo is not None)
         self.fan_panel.grid(row=13, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
-        
+        current_row = 14
+
+        # MG car panels
+        self.mg_panels = {}
+        for car_id, manager in self.mg_cars.items():
+            mg_panel = MGCarPanel(
+                self.scrollable, manager.config,
+                on_action=lambda action, cid=car_id: self._on_mg_action(cid, action),
+                on_settings_change=lambda cid=car_id: self._on_mg_settings_change(cid),
+            )
+            mg_panel.grid(row=current_row, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+            self.mg_panels[car_id] = mg_panel
+            current_row += 1
+        if self.mg_panels:
+            self.after(1000, self._refresh_mg_panels)
+
         # Outlet-specific settings panels
         self.outlet_settings = {}
         outlets = self.tapo.get_all_outlets()
         sorted_outlets = sorted(outlets.values(), key=lambda o: o.config.priority)
-        
-        current_row = 14
+
         for outlet in sorted_outlets:
             outlet_panel = OutletSettingsPanel(
                 self.scrollable,
@@ -758,9 +784,9 @@ class DeyeApp(ctk.CTk):
         
         # Only apply if settings changed — but also re-apply if the register
         # is out of sync (e.g. a previous write failed).
-        # The BMS charge limit is applied raise-only inside _apply_charge_caps
-        # (shared by every writer) so this path always agrees with sunset and
-        # protection, and a falling BMS limit never triggers a write.
+        # The BMS charge limit is handled inside _apply_charge_caps (shared by
+        # every writer) so this path always agrees with sunset and protection:
+        # no write while the register already meets the BMS limit.
         effective_target_max = self._apply_charge_caps(
             target_max + self._protection_boost_amps + self._sunset_boost_amps
         )
@@ -925,19 +951,20 @@ class DeyeApp(ctk.CTk):
             self._log_error(f"Failed to apply charge settings")
 
     def _apply_charge_caps(self, amps: int) -> int:
-        """Apply the off-grid 50% multiplier (if active), the inverter cap, then a
-        raise-only BMS cap.
+        """Apply the off-grid 50% multiplier (if active), the inverter cap, then
+        skip writes the BMS makes useless.
 
         This is the final stage applied to any computed max-charge target so the
         off-grid boost stacks on top of all other boosts (schedule + protection +
         sunset) without changing how those values are tracked internally.
 
-        BMS cap: never request more than the BMS accepts (the inverter would
-        ignore it), but never write just to follow a falling BMS limit either.
-        A target above the BMS limit resolves to the current register value if
-        that already meets the limit, otherwise to the limit itself. Because
-        the result depends only on the target, the BMS limit and the current
-        register, every writer computes the same value and they can't fight.
+        BMS: the inverter never charges faster than the BMS limit, whatever the
+        register says. So a target above the BMS limit resolves to the current
+        register value when that already meets the limit (any write would leave
+        the charge rate unchanged), otherwise to the full target, not the limit,
+        so the register doesn't need another write when the BMS limit rises.
+        Because the result depends only on the target, the BMS limit and the
+        current register, every writer computes the same value and they can't fight.
         """
         if self._offgrid_active:
             amps = int(round(amps * 1.5))
@@ -945,7 +972,8 @@ class DeyeApp(ctk.CTk):
         bms_limit = getattr(self, "_bms_charge_limit", 0) or 0
         if bms_limit > 0 and amps > bms_limit:
             current = getattr(self, "_current_max_charge", None) or 0
-            amps = current if current >= bms_limit else bms_limit
+            if current >= bms_limit:
+                amps = current
         return max(0, amps)
 
     def _update_charge_display(self) -> None:
@@ -967,7 +995,7 @@ class DeyeApp(ctk.CTk):
                 settings = self.prioritization_panel.get_settings()
                 normal_target = settings["normal_target_soc"]
                 if self._last_prioritization_slot_idx is not None:
-                    if self.inverter.set_time_of_use_target_soc(self._last_prioritization_slot_idx, normal_target):
+                    if self._write_tou_target_soc(self._last_prioritization_slot_idx, normal_target):
                         self._last_tou_target_soc = normal_target
                         print(f"[PRIORITIZATION] Restored normal target {normal_target}% on slot {self._last_prioritization_slot_idx + 1}")
                 self._prioritization_boosted = False
@@ -2025,6 +2053,14 @@ class DeyeApp(ctk.CTk):
 
         return None
 
+    def _write_tou_target_soc(self, slot_idx: int, target_soc: int) -> bool:
+        """Write a TOU slot's target SOC and mirror it in the slot cache until the next 60s read."""
+        if not self.inverter.set_time_of_use_target_soc(slot_idx, target_soc):
+            return False
+        if self._tou_slots_cache and slot_idx < len(self._tou_slots_cache):
+            self._tou_slots_cache[slot_idx]["target_soc"] = target_soc
+        return True
+
     def _process_charge_prioritization(self, data: InverterData) -> None:
         """
         Prioritise charging over selling when other algorithms request heavy charging.
@@ -2032,9 +2068,10 @@ class DeyeApp(ctk.CTk):
         Trigger condition to boost:
         - Prioritization panel enabled
         - Inverter has power to sell (grid_power < -sell_trigger_power, e.g. exporting > 1000W)
-        - Boost algorithms say it should be charging heavily:
+        - Heavy charging is requested, by a boost algorithm or by the schedule itself:
           (_protection_active and _protection_boost_amps > 0) OR (_sunset_active and _sunset_boost_amps > 0)
-        
+          OR the active interval's Max Charge is at DEYE_MAX_CHARGE_AMPS_LIMIT (e.g. intervals set to 200A)
+
         Action when boosting:
         - Determine current TOU interval index (0-5) from inverter registers 148-153
         - Raise that interval's target SOC (register 166-171) to boost_target_soc (e.g. 90%)
@@ -2042,6 +2079,10 @@ class DeyeApp(ctk.CTk):
         Condition to fallback:
         - Pulling heavily from grid (grid_power > grid_pull_threshold_w, e.g. > 500W) for > grid_pull_duration_sec (e.g. 300s)
         - Lower target SOC back to normal_target_soc (e.g. 20%)
+
+        A slot the inverter already reports at boost_target_soc (left raised by a run that
+        ended without restoring it, e.g. crash or reboot) is adopted as boosted, so the
+        fallback and the slot-end restore still apply to it.
         """
         if not getattr(self, "prioritization_panel", None) or not self.prioritization_panel.is_enabled():
             return
@@ -2064,7 +2105,7 @@ class DeyeApp(ctk.CTk):
             if self._prioritization_boosted:
                 reg = 166 + prev_slot
                 print(f"[PRIORITIZATION] Restoring previous slot {prev_slot + 1} (reg {reg}) target SOC to {normal_target}%")
-                if self.inverter.set_time_of_use_target_soc(prev_slot, normal_target):
+                if self._write_tou_target_soc(prev_slot, normal_target):
                     self._log_error(f"Charge Prioritization: Restored Slot {prev_slot + 1} target SOC to {normal_target}%")
             # Reset state for the new slot
             self._prioritization_boosted = False
@@ -2072,10 +2113,22 @@ class DeyeApp(ctk.CTk):
 
         self._last_prioritization_slot_idx = slot_idx
 
-        # Check heavy charging request from other algorithms
+        # Adopt a slot left at the boost target by an earlier run (crash, reboot): the
+        # in-memory flag starts False, which would otherwise disable fallback and restore
+        if not self._prioritization_boosted and self._tou_slots_cache[slot_idx].get("target_soc") == boost_target:
+            print(f"[PRIORITIZATION] Slot {slot_idx + 1} (reg {166 + slot_idx}) already at {boost_target}% on the inverter "
+                  f"- treating it as boosted")
+            self._prioritization_boosted = True
+            self._last_tou_target_soc = boost_target
+
+        # Check heavy charging request from other algorithms, or a schedule that already
+        # asks for the hardware maximum (intervals set straight to the limit, no boost needed)
+        base_charge = self._get_base_charge_amps()
+        max_charge_at_limit = base_charge >= deye_config.max_charge_amps_limit
         heavy_charging_requested = (
             (getattr(self, "_protection_active", False) and getattr(self, "_protection_boost_amps", 0) > 0)
             or (getattr(self, "_sunset_active", False) and getattr(self, "_sunset_boost_amps", 0) > 0)
+            or max_charge_at_limit
         )
 
         # Check if inverter has power to sell (exporting beyond trigger power)
@@ -2101,8 +2154,9 @@ class DeyeApp(ctk.CTk):
                 reg = 166 + slot_idx
                 print(f"[PRIORITIZATION] Raising TOU slot {slot_idx + 1} (reg {reg}) target SOC to {boost_target}% "
                       f"(exporting {-data.grid_power}W > {sell_trigger_w}W, heavy charging requested: "
-                      f"prot={self._protection_boost_amps}A, sunset={self._sunset_boost_amps}A)")
-                if self.inverter.set_time_of_use_target_soc(slot_idx, boost_target):
+                      f"prot={self._protection_boost_amps}A, sunset={self._sunset_boost_amps}A, "
+                      f"max charge={base_charge}A/{deye_config.max_charge_amps_limit}A)")
+                if self._write_tou_target_soc(slot_idx, boost_target):
                     self._prioritization_boosted = True
                     self._last_tou_target_soc = boost_target
                     self._log_error(f"Charge Prioritization: Raised Slot {slot_idx + 1} target SOC to {boost_target}%")
@@ -2119,7 +2173,7 @@ class DeyeApp(ctk.CTk):
             if should_fallback:
                 reg = 166 + slot_idx
                 print(f"[PRIORITIZATION] Lowering TOU slot {slot_idx + 1} (reg {reg}) target SOC to {normal_target}% ({fallback_reason})")
-                if self.inverter.set_time_of_use_target_soc(slot_idx, normal_target):
+                if self._write_tou_target_soc(slot_idx, normal_target):
                     self._prioritization_boosted = False
                     self._last_tou_target_soc = normal_target
                     self._prioritization_grid_pull_since = None
@@ -2583,6 +2637,22 @@ class DeyeApp(ctk.CTk):
             "INVERTER_FAN_OFF_TEMP": fan["off_temp"],
         })
 
+        for car_id, mg_panel in self.mg_panels.items():
+            car_name = self.mg_cars[car_id].config.name
+            temperature = section(car_name, lambda p=mg_panel: p.get_temperature(strict=True))
+            schedule = section(car_name, lambda p=mg_panel: p.get_schedule(strict=True))
+            prefix = f"MG_CAR_{car_id}_"
+            values.update({
+                f"{prefix}TEMP": temperature,
+                f"{prefix}ACHIEVE_TEMP": mg_panel.get_achieve_temperature(),
+                f"{prefix}SCHEDULE_ENABLED": schedule.enabled,
+                f"{prefix}SCHEDULE_TIME": f"{schedule.hour:02d}:{schedule.minute:02d}",
+                f"{prefix}SCHEDULE_DAYS": format_days(schedule.days),
+                f"{prefix}SCHEDULE_ACTION": schedule.action.value,
+                f"{prefix}SCHEDULE_WINDSHIELD": schedule.windshield,
+                f"{prefix}SCHEDULE_REAR_DEFROST": schedule.rear_defrost,
+            })
+
         outlets = self.tapo.get_all_outlets()
         for outlet_id, cfg_vars in self.outlet_cfg.items():
             outlet_cfg = outlets[outlet_id].config
@@ -2690,6 +2760,29 @@ class DeyeApp(ctk.CTk):
             result_text=result.value, detail=detail, error=error,
         ))
 
+    def _on_mg_action(self, car_id: int, action: MGAction) -> None:
+        """Run an MG car button in the background (main thread)."""
+        manager = self.mg_cars[car_id]
+        try:
+            temperature = self.mg_panels[car_id].get_temperature(strict=True)
+        except ValueError as e:
+            self._log_error(f"[{manager.config.name}] Not sent: invalid temperature ({e})")
+            return
+        if not manager.request(MGRequest(action, temperature)):
+            self._log_error(f"[{manager.config.name}] Busy - wait for the current command to finish")
+
+    def _on_mg_settings_change(self, car_id: int) -> None:
+        """Hand the edited schedule, temperature and achieve switch to the car's manager (main thread)."""
+        mg_panel = self.mg_panels[car_id]
+        self.mg_cars[car_id].set_schedule(mg_panel.get_schedule(), mg_panel.get_temperature())
+        self.mg_cars[car_id].set_achieve_temperature(mg_panel.get_achieve_temperature())
+
+    def _refresh_mg_panels(self) -> None:
+        """Show the MG managers' state; runs every second on the main thread."""
+        for car_id, mg_panel in self.mg_panels.items():
+            mg_panel.update_state(self.mg_cars[car_id].get_state())
+        self.after(1000, self._refresh_mg_panels)
+
     def _process_heatpump(self, data: InverterData) -> None:
         """Process Tuya heat pump logic (called from background thread)."""
         ui_settings = self.heatpump_panel.get_settings()
@@ -2758,6 +2851,8 @@ class DeyeApp(ctk.CTk):
             self.hp_manager.stop()
         if self.ev_charger:
             self.ev_charger.stop()
+        for manager in self.mg_cars.values():
+            manager.stop()
         self.inverter.disconnect()
         super().destroy()
 

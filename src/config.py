@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, List
 from dotenv import load_dotenv
 
+from src.mg_logic import MGAction, MGSchedule, parse_days, parse_time
+
 
 def get_app_path() -> Path:
     """Get the application path, works both for dev and PyInstaller bundle."""
@@ -318,6 +320,65 @@ class InverterFanConfig:
     off_temp: float = field(default_factory=lambda: float(os.getenv("INVERTER_FAN_OFF_TEMP", "45.0")))  # Fan OFF when AC temp drops below this (°C)
 
 
+@dataclass
+class MGCarConfig:
+    """One MG car on its own SAIC iSmart account (MG_CAR_N_*).
+
+    SAIC allows one login per account: the app logs that account out of the iSmart
+    phone app, so use an account nobody uses on their phone.
+    """
+    car_id: int
+    name: str
+    username: str
+    password: str
+    phone_country_code: str = ""  # Only when the username is a phone number (e.g. 40)
+    vin: str = ""                 # Last VIN digits; only needed when the account has several cars
+    temperature: int = 22         # Default climate temperature (°C), editable in the app
+    achieve_temperature: bool = False  # Restart the climate until the cabin reaches the temperature
+    schedule: MGSchedule = field(default_factory=MGSchedule)
+
+
+def load_mg_car_configs() -> List[MGCarConfig]:
+    """Load MG cars from MG_CAR_N_* (N = 1, 2, ...; stops at the first missing MG_CAR_N_USER).
+
+    Schedule keys: MG_CAR_N_SCHEDULE_ENABLED, _TIME (HH:MM), _DAYS (Mon,Tue,...),
+    _ACTION (climate / climate_driver / climate_both / off), _WINDSHIELD, _REAR_DEFROST.
+    """
+    cars = []
+    i = 1
+    while True:
+        prefix = f"MG_CAR_{i}_"
+        username = os.getenv(f"{prefix}USER")
+        if not username:
+            break
+        try:
+            hour, minute = parse_time(os.getenv(f"{prefix}SCHEDULE_TIME", "07:00"))
+            schedule = MGSchedule(
+                enabled=os.getenv(f"{prefix}SCHEDULE_ENABLED", "false").lower() == "true",
+                hour=hour, minute=minute,
+                days=parse_days(os.getenv(f"{prefix}SCHEDULE_DAYS", "Mon,Tue,Wed,Thu,Fri")),
+                action=MGAction(os.getenv(f"{prefix}SCHEDULE_ACTION", "climate").strip().lower()),
+                windshield=os.getenv(f"{prefix}SCHEDULE_WINDSHIELD", "false").lower() == "true",
+                rear_defrost=os.getenv(f"{prefix}SCHEDULE_REAR_DEFROST", "false").lower() == "true",
+            )
+        except ValueError as e:
+            print(f"[CONFIG] Warning: invalid {prefix}SCHEDULE_* ({e}), schedule disabled")
+            schedule = MGSchedule()
+        cars.append(MGCarConfig(
+            car_id=i,
+            name=os.getenv(f"{prefix}NAME", f"MG Car {i}"),
+            username=username,
+            password=os.getenv(f"{prefix}PASS", ""),
+            phone_country_code=os.getenv(f"{prefix}PHONE_COUNTRY_CODE", ""),
+            vin=os.getenv(f"{prefix}VIN", ""),
+            temperature=int(os.getenv(f"{prefix}TEMP", "22")),
+            achieve_temperature=os.getenv(f"{prefix}ACHIEVE_TEMP", "false").lower() == "true",
+            schedule=schedule,
+        ))
+        i += 1
+    return cars
+
+
 def load_heatpump_schedules() -> list:
     """Load default heat pump temperature schedule slots from environment variables.
 
@@ -425,4 +486,5 @@ ev_charger_config = EVChargerConfig()
 heatpump_config = TuyaHeatpumpConfig()
 heatpump_schedules = load_heatpump_schedules()
 inverter_fan_config = InverterFanConfig()
+mg_car_configs = load_mg_car_configs()
 default_schedules = load_default_schedules()
