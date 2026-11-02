@@ -82,6 +82,7 @@ class MGCarManager:
         self._last_schedule_attempt: Optional[datetime] = None
         self._remote_blocked = False  # The last action hit the car's "too frequent operations" block
         self._achieve_enabled = config.achieve_temperature
+        self._achieve_max_restarts = config.achieve_max_restarts
         self._achieve: Optional[AchieveJob] = None  # Guarded by _state_lock
 
         self._api: Optional[SaicApi] = None
@@ -116,13 +117,17 @@ class MGCarManager:
             self._schedule = schedule
             self._schedule_temp = temperature
 
-    def set_achieve_temperature(self, enabled: bool) -> None:
-        """Turn the achieve-temperature restarts on or off; off cancels a running one."""
+    def set_achieve_temperature(self, enabled: bool, max_restarts: int) -> None:
+        """Turn the achieve-temperature restarts on or off (off cancels a running one) and set
+        how many restarts this car allows."""
         with self._state_lock:
             self._achieve_enabled = enabled
+            self._achieve_max_restarts = max_restarts
             cancelled = self._achieve if not enabled else None
             if cancelled:
                 self._achieve = None
+            elif self._achieve:
+                self._achieve.max_restarts = max_restarts
         if cancelled:
             self._log("Achieve temperature switched off - auto-restart cancelled")
 
@@ -400,7 +405,7 @@ class MGCarManager:
         with self._state_lock:
             if not self._achieve_enabled:
                 return
-            job = self._achieve = new_achieve_job(request, self._series, cabin, started)
+            job = self._achieve = new_achieve_job(request, self._series, cabin, started, self._achieve_max_restarts)
         start_reading = f"cabin {cabin}°C" if cabin is not None else "no cabin reading yet"
         self._log(f"Achieve temperature: {'heating' if job.heating else 'cooling'} to {job.target}°C "
                   f"({start_reading}), checking the cabin at {job.next_check:%H:%M}")
@@ -464,6 +469,10 @@ class MGCarManager:
             minutes = int(ACHIEVE_MAX.total_seconds() // 60)
             self._end_achieve(job, False, f"cabin still {cabin} after {minutes} min, auto-restart stopped")
             return
+        if step == AchieveStep.NO_RESTARTS_LEFT:
+            self._end_achieve(job, False, f"cabin {cabin} after {job.restarts} of {job.max_restarts} restart(s) "
+                                          f"this car allows, auto-restart stopped")
+            return
         if step == AchieveStep.NO_READING:
             self._end_achieve(job, False, f"the car didn't report the cabin temperature (sent {raw_cabin}), "
                                           f"auto-restart stopped")
@@ -475,7 +484,9 @@ class MGCarManager:
             self._log(note)
         with self._state_lock:
             job.restarts += 1
-        self._log(f"Achieve {job.target}°C: cabin {cabin} and the climate stopped, restarting it ({job.restarts})")
+        what = "climate and seats" if any(s.kind == StepKind.SEATS for s in steps) else "climate"
+        self._log(f"Achieve {job.target}°C: cabin {cabin} and the climate stopped, restarting the {what} "
+                  f"({job.restarts}/{job.max_restarts})")
         started = datetime.now()
         problems, after = await self._send_steps(request, steps)
         if after.climate == 0:
@@ -486,8 +497,8 @@ class MGCarManager:
             job.errors = 0
             note_cabin_reading(job, after, datetime.now())
         details = f"; {'; '.join(problems)}" if problems else ""
-        self._set_result(not problems, f"Achieve {job.target}°C: cabin {cabin}, climate restarted "
-                                       f"({job.restarts}){details}")
+        self._set_result(not problems, f"Achieve {job.target}°C: cabin {cabin}, {what} restarted "
+                                       f"({job.restarts}/{job.max_restarts}){details}")
 
     def _achieve_error(self, job: Optional[AchieveJob], text: str) -> None:
         """Try again shortly; give up after ACHIEVE_MAX_ERRORS failures in a row."""

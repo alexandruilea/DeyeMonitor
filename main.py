@@ -2645,6 +2645,7 @@ class DeyeApp(ctk.CTk):
             values.update({
                 f"{prefix}TEMP": temperature,
                 f"{prefix}ACHIEVE_TEMP": mg_panel.get_achieve_temperature(),
+                f"{prefix}ACHIEVE_MAX_RESTARTS": section(car_name, lambda p=mg_panel: p.get_achieve_max_restarts(strict=True)),
                 f"{prefix}SCHEDULE_ENABLED": schedule.enabled,
                 f"{prefix}SCHEDULE_TIME": f"{schedule.hour:02d}:{schedule.minute:02d}",
                 f"{prefix}SCHEDULE_DAYS": format_days(schedule.days),
@@ -2775,7 +2776,8 @@ class DeyeApp(ctk.CTk):
         """Hand the edited schedule, temperature and achieve switch to the car's manager (main thread)."""
         mg_panel = self.mg_panels[car_id]
         self.mg_cars[car_id].set_schedule(mg_panel.get_schedule(), mg_panel.get_temperature())
-        self.mg_cars[car_id].set_achieve_temperature(mg_panel.get_achieve_temperature())
+        self.mg_cars[car_id].set_achieve_temperature(mg_panel.get_achieve_temperature(),
+                                                     mg_panel.get_achieve_max_restarts())
 
     def _refresh_mg_panels(self) -> None:
         """Show the MG managers' state; runs every second on the main thread."""

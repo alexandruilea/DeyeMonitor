@@ -174,9 +174,23 @@ class TestAchieveTemperature(unittest.TestCase):
     START = datetime(2026, 12, 7, 7, 0)
     CHECK = START + ACHIEVE_CHECK
 
-    def job(self, temperature=22, cabin_before=2, series="ZS EV S", **extras):
+    def job(self, temperature=22, cabin_before=2, series="ZS EV S", max_restarts=5, **extras):
         return new_achieve_job(MGRequest(MGAction.CLIMATE_DRIVER_SEAT, temperature, **extras),
-                               series, cabin_before, self.START)
+                               series, cabin_before, self.START, max_restarts)
+
+    def test_stops_when_the_cars_restarts_are_used(self):
+        job = self.job(max_restarts=2)
+        job.restarts = 2
+        self.assertEqual(achieve_step(job, self.status(14), self.CHECK), AchieveStep.NO_RESTARTS_LEFT)
+        # No point polling the last run until it stops
+        self.assertEqual(achieve_step(job, self.status(14, climate=2), self.CHECK), AchieveStep.NO_RESTARTS_LEFT)
+        self.assertEqual(achieve_step(job, self.status(21), self.CHECK), AchieveStep.REACHED)
+        job.restarts = 1
+        self.assertEqual(achieve_step(job, self.status(14), self.CHECK), AchieveStep.RESTART)
+
+    def test_zero_restarts_only_reports(self):
+        self.assertEqual(achieve_step(self.job(max_restarts=0), self.status(14), self.CHECK),
+                         AchieveStep.NO_RESTARTS_LEFT)
 
     @staticmethod
     def status(cabin, climate=0, locked=True):

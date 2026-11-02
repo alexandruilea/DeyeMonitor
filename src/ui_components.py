@@ -2745,11 +2745,19 @@ class MGCarPanel(ctk.CTkFrame):
         self.temperature.bind("<FocusOut>", self._on_field_change)
         ctk.CTkLabel(controls, text="°C", font=("Roboto", 10)).grid(row=0, column=2, padx=(2, 15), pady=8)
 
+        achieve = ctk.CTkFrame(controls, fg_color="transparent")
+        achieve.grid(row=0, column=3, padx=(0, 10), pady=8)
         self.achieve_temp = ctk.BooleanVar(value=config.achieve_temperature)
         ctk.CTkSwitch(
-            controls, text="Achieve temperature", variable=self.achieve_temp,
+            achieve, text="Achieve temperature", variable=self.achieve_temp,
             font=("Roboto", 10, "bold"), command=self._on_field_change
-        ).grid(row=0, column=3, padx=(0, 10), pady=8)
+        ).grid(row=0, column=0)
+        ctk.CTkLabel(achieve, text="max", font=("Roboto", 10)).grid(row=0, column=1, padx=(4, 3))
+        self.achieve_max_restarts = ctk.CTkEntry(achieve, width=32, justify="center")
+        self.achieve_max_restarts.grid(row=0, column=2)
+        self.achieve_max_restarts.insert(0, str(config.achieve_max_restarts))
+        self.achieve_max_restarts.bind("<FocusOut>", self._on_field_change)
+        ctk.CTkLabel(achieve, text="restarts", font=("Roboto", 10)).grid(row=0, column=3, padx=(3, 0))
 
         self.action_buttons = {}
         for col, (action, color, hover) in enumerate(self.ACTION_BUTTONS, start=4):
@@ -2844,6 +2852,18 @@ class MGCarPanel(ctk.CTkFrame):
     def get_achieve_temperature(self) -> bool:
         return self.achieve_temp.get()
 
+    def get_achieve_max_restarts(self, strict: bool = False) -> int:
+        """Climate restarts allowed per start, 0-10 (strict=True raises on an invalid entry)."""
+        try:
+            value = int(self.achieve_max_restarts.get().strip())
+            if not 0 <= value <= 10:
+                raise ValueError(f"max restarts {value} is outside 0-10")
+            return value
+        except ValueError:
+            if strict:
+                raise
+            return self.config.achieve_max_restarts
+
     def get_schedule(self, strict: bool = False) -> Optional[MGSchedule]:
         """Schedule from the fields; None for an invalid time (strict=True raises instead)."""
         try:
@@ -2909,16 +2929,15 @@ class MGCarPanel(ctk.CTkFrame):
         if job:
             verb = "Heating" if job.heating else "Cooling"
             reading = f" (cabin {job.cabin_temp}°C at {job.cabin_time:%H:%M})" if job.cabin_temp is not None else ""
-            restarts = f", restarted {job.restarts}x" if job.restarts else ""
-            self._show(self.lbl_achieve, text=f"🎯 {verb} to {job.target}°C{reading}: next check {job.next_check:%H:%M}"
-                                              f"{restarts}, no restarts after {job.deadline:%H:%M}",
+            self._show(self.lbl_achieve, text=f"🎯 {verb} to {job.target}°C{reading}: next check {job.next_check:%H:%M}, "
+                                              f"restarts used {job.restarts}/{job.max_restarts}",
                        text_color="#5DADE2")
         elif self.achieve_temp.get():
             self._show(self.lbl_achieve,
                        text=f"Achieve temperature on: {int(ACHIEVE_CHECK.total_seconds() // 60)} min after each "
-                            f"climate start the app checks the cabin and restarts the climate until it is within "
-                            f"{ACHIEVE_TOLERANCE}°C of the set temperature (for up to "
-                            f"{int(ACHIEVE_MAX.total_seconds() // 60)} min)",
+                            f"climate start the app checks the cabin and restarts the climate, at most "
+                            f"{self.get_achieve_max_restarts()} times, until it is within {ACHIEVE_TOLERANCE}°C of the "
+                            f"set temperature (for up to {int(ACHIEVE_MAX.total_seconds() // 60)} min)",
                        text_color="gray")
         else:
             self._show(self.lbl_achieve, text="Achieve temperature off: the car stops the climate after about 10 minutes",

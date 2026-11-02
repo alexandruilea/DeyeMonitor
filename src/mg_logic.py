@@ -124,6 +124,7 @@ class AchieveStep(Enum):
     UNLOCKED = "unlocked"      # Someone opened the car: leave it alone
     NO_READING = "no reading"  # Climate stopped and the car didn't report the cabin temperature
     TIMED_OUT = "timed out"
+    NO_RESTARTS_LEFT = "no restarts left"  # Used the car's allowance of remote starts in a row
 
 
 @dataclass
@@ -134,6 +135,7 @@ class AchieveJob:
     heating: bool          # False when cooling a hot cabin down
     deadline: datetime     # No restarts after this
     next_check: datetime
+    max_restarts: int      # Per car: the car refuses remote starts after a few in a row
     restarts: int = 0
     errors: int = 0        # Failed checks in a row
     cabin_temp: Optional[int] = None       # Last cabin reading during the job
@@ -244,7 +246,8 @@ def verify_result(request: MGRequest, seat_support: SeatSupport, status: CarStat
     return problems
 
 
-def new_achieve_job(request: MGRequest, series: str, cabin_temp: Optional[int], started: datetime) -> AchieveJob:
+def new_achieve_job(request: MGRequest, series: str, cabin_temp: Optional[int], started: datetime,
+                    max_restarts: int) -> AchieveJob:
     """Job for a climate start; cabin_temp is the reading around the start (decides heating vs cooling)."""
     low, high = temperature_range(series)
     target = min(max(request.temperature, low), high)
@@ -253,6 +256,7 @@ def new_achieve_job(request: MGRequest, series: str, cabin_temp: Optional[int], 
         heating=cabin_temp is None or cabin_temp <= target,
         deadline=started + ACHIEVE_MAX,
         next_check=started + ACHIEVE_CHECK,
+        max_restarts=max_restarts,
         cabin_temp=cabin_temp,
         cabin_time=started if cabin_temp is not None else None,
     )
@@ -275,6 +279,7 @@ def achieve_step(job: AchieveJob, status: CarStatus, now: datetime) -> AchieveSt
 
     Uses the car's current cabin reading, or the job's last one when the car sends none.
     An unlocked car means someone is at it, so the app stops instead of locking it again.
+    With no restarts left it ends at once, without waiting for the last run to stop.
     """
     if status.locked is False:
         return AchieveStep.UNLOCKED
@@ -283,6 +288,8 @@ def achieve_step(job: AchieveJob, status: CarStatus, now: datetime) -> AchieveSt
         return AchieveStep.REACHED
     if now >= job.deadline:
         return AchieveStep.TIMED_OUT
+    if job.restarts >= job.max_restarts:
+        return AchieveStep.NO_RESTARTS_LEFT
     if status.climate:
         return AchieveStep.WAIT
     if cabin is None:
@@ -291,7 +298,8 @@ def achieve_step(job: AchieveJob, status: CarStatus, now: datetime) -> AchieveSt
 
 
 def achieve_restart_request(job: AchieveJob) -> MGRequest:
-    """Restarts send the climate and seats only: the defrosters did their job with the first start."""
+    """Restarts send the climate, plus the seats when the car reports them off (plan_commands skips
+    seats already at their level). The defrosters did their job with the first start."""
     return MGRequest(job.request.action, job.request.temperature)
 
 

@@ -335,6 +335,7 @@ class MGCarConfig:
     vin: str = ""                 # Last VIN digits; only needed when the account has several cars
     temperature: int = 22         # Default climate temperature (°C), editable in the app
     achieve_temperature: bool = False  # Restart the climate until the cabin reaches the temperature
+    achieve_max_restarts: int = 2      # The car refuses remote starts after a few in a row (S9: 2 restarts)
     schedule: MGSchedule = field(default_factory=MGSchedule)
 
 
@@ -373,6 +374,7 @@ def load_mg_car_configs() -> List[MGCarConfig]:
             vin=os.getenv(f"{prefix}VIN", ""),
             temperature=int(os.getenv(f"{prefix}TEMP", "22")),
             achieve_temperature=os.getenv(f"{prefix}ACHIEVE_TEMP", "false").lower() == "true",
+            achieve_max_restarts=int(os.getenv(f"{prefix}ACHIEVE_MAX_RESTARTS", "2")),
             schedule=schedule,
         ))
         i += 1

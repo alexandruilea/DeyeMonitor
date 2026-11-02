@@ -349,8 +349,40 @@ class TestAchieveTemperature(unittest.TestCase):
 
     def test_switching_off_cancels(self):
         _, manager = self.started()
-        manager.set_achieve_temperature(False)
+        manager.set_achieve_temperature(False, 2)
         self.assertIsNone(manager.get_state().achieve)
+
+    def test_stops_after_the_cars_restart_allowance(self):
+        api, manager = self.started()  # Default allowance: 2 restarts
+        for expected in (1, 2):
+            self.climate_stopped(api, 12)
+            self.check(manager)
+            self.assertEqual(manager.get_state().achieve.restarts, expected)
+        api.calls.clear()
+        self.climate_stopped(api, 14)
+        self.check(manager)
+        self.assertEqual(names(api), ["status"])  # No third start
+        state = manager.get_state()
+        self.assertIsNone(state.achieve)
+        self.assertIn("2 of 2 restart(s)", state.result)
+
+    def test_restart_resends_seats_only_when_off(self):
+        api, manager = self.started()
+        self.climate_stopped(api, 12)  # Seats still on (1/0)
+        self.check(manager)
+        self.assertNotIn("seats", names(api))
+        self.assertIn("climate restarted", manager.get_state().result)
+        api.calls.clear()
+        self.climate_stopped(api, 12)
+        api.car.update(frontLeftSeatHeatLevel=0)
+        self.check(manager)
+        self.assertIn(("seats", 1, 0), api.calls)
+        self.assertIn("climate and seats restarted", manager.get_state().result)
+
+    def test_changed_allowance_applies_to_running_job(self):
+        _, manager = self.started()
+        manager.set_achieve_temperature(True, 1)
+        self.assertEqual(manager.get_state().achieve.max_restarts, 1)
 
     def test_logout_stops_without_logging_in_again(self):
         api, manager = self.started()
