@@ -689,9 +689,11 @@ class DeyeApp(ctk.CTk):
 
             # Suppress sell when battery SOC is below/equal minimum or when local load is high and drawing from battery
             current_soc = data.soc if data is not None else 100
-            selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
+            selling_intended = deye_config.sell_cutoff_enabled and (target_sell or target_sell_power > deye_config.sell_cutoff_power)
             soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
-            load_suppressed = selling_intended and self._sell_load_suppressed and not solar_covers_load
+            # Use only the debounced latch: re-checking solar coverage on every poll
+            # made this flap (battery_power hovers around 0 in Zero Export mode).
+            load_suppressed = selling_intended and self._sell_load_suppressed
             sell_suppressed = soc_suppressed or load_suppressed
 
             if soc_suppressed:
@@ -749,9 +751,9 @@ class DeyeApp(ctk.CTk):
             min_batt_pct = defaults.get("min_batt_pct", 0)
 
             current_soc = data.soc if data is not None else 100
-            selling_intended = target_sell or target_sell_power > deye_config.sell_cutoff_power
+            selling_intended = deye_config.sell_cutoff_enabled and (target_sell or target_sell_power > deye_config.sell_cutoff_power)
             soc_suppressed = selling_intended and min_batt_pct > 0 and current_soc <= min_batt_pct
-            load_suppressed = selling_intended and self._sell_load_suppressed and not solar_covers_load
+            load_suppressed = selling_intended and self._sell_load_suppressed  # debounced latch only (see above)
             sell_suppressed = soc_suppressed or load_suppressed
 
             if soc_suppressed:

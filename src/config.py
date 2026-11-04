@@ -67,6 +67,7 @@ class DeyeConfig:
     default_max_discharge_amps: int = field(default_factory=lambda: int(os.getenv("DEYE_DEFAULT_MAX_DISCHARGE_AMPS", "150")))
     zero_export_mode: int = field(default_factory=lambda: int(os.getenv("DEYE_ZERO_EXPORT_MODE", "2")))  # 1=Zero Export to Load (internal CT), 2=Zero Export to CT (external CT)
     sell_cutoff_power: int = field(default_factory=lambda: int(os.getenv("SCHEDULE_SELL_CUTOFF_POWER", "0")))  # Max sell power (W) sent to inverter when battery SOC <= min_batt_pct or during high load
+    sell_cutoff_enabled: bool = field(default_factory=lambda: os.getenv("SCHEDULE_SELL_CUTOFF_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"))  # false = never drop register 143 to the cutoff (e.g. winter, battery sell disabled); 143 stays at the slot's sell_power
     high_load_kw: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_KW", "6.0")))  # House load threshold that triggers sell cutoff & sunset pause (kW)
     high_load_hold_minutes: float = field(default_factory=lambda: float(os.getenv("HIGH_LOAD_HOLD_MIN", "5.0")))  # Minutes load must stay above/below threshold
     min_register_write_interval: int = field(default_factory=lambda: int(os.getenv("DEYE_MIN_REGISTER_WRITE_INTERVAL", "600")))  # Default minimum seconds between writes to the same register (reduces flash wear)
