@@ -50,6 +50,7 @@ class TestChargePrioritization(unittest.TestCase):
         # Initialize tracking state variables
         self.app._prioritization_boosted = False
         self.app._prioritization_grid_pull_since = None
+        self.app._prioritization_export_since = None
         self.app._last_tou_target_soc = None
         self.app._last_prioritization_slot_idx = None
         self.app._last_tou_read_time = time.time()
@@ -106,8 +107,15 @@ class TestChargePrioritization(unittest.TestCase):
         t7 = datetime(2026, 6, 1, 0, 30)
         self.assertEqual(self.app._get_current_tou_slot_index(t7), 5)
 
+    def _process_held(self, data: InverterData, seconds: float = 300, start: float = 1000.0) -> None:
+        """Process the same reading at `start` and again `seconds` later (the hold time is 300s)."""
+        with patch("time.time", return_value=start):
+            self.app._process_charge_prioritization(data)
+        with patch("time.time", return_value=start + seconds):
+            self.app._process_charge_prioritization(data)
+
     def test_boost_triggered_by_protection(self):
-        """When inverter exports > 1000W and protection boost > 0A, raise target SOC to 90%."""
+        """When inverter exports > 1000W and protection boost > 0A for the hold time, raise target SOC to 90%."""
         with patch("datetime.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 6, 1, 13, 35)  # Slot 2 (Time 3)
 
@@ -128,7 +136,7 @@ class TestChargePrioritization(unittest.TestCase):
                 battery_voltage=52.0,
             )
 
-            self.app._process_charge_prioritization(data)
+            self._process_held(data)
 
             # Slot 2 is active, target SOC should be written as 90% (reg 168)
             self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 90)
@@ -157,7 +165,7 @@ class TestChargePrioritization(unittest.TestCase):
                 battery_voltage=52.0,
             )
 
-            self.app._process_charge_prioritization(data)
+            self._process_held(data)
 
             self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 90)
             self.assertTrue(self.app._prioritization_boosted)
@@ -238,7 +246,7 @@ class TestChargePrioritization(unittest.TestCase):
 
             self.app.schedule_panel.get_active_schedule.return_value = {"max_charge_amps": 200}
 
-            self.app._process_charge_prioritization(self._selling_data())
+            self._process_held(self._selling_data())
 
             self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 90)
             self.assertTrue(self.app._prioritization_boosted)
@@ -252,7 +260,7 @@ class TestChargePrioritization(unittest.TestCase):
             self.app.schedule_panel.is_enabled.return_value = False
             self.app.schedule_panel.get_default_values.return_value = {"max_charge_amps": 200}
 
-            self.app._process_charge_prioritization(self._selling_data())
+            self._process_held(self._selling_data())
 
             self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 90)
             self.assertTrue(self.app._prioritization_boosted)
@@ -308,12 +316,64 @@ class TestChargePrioritization(unittest.TestCase):
             self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 20)
             self.assertFalse(self.app._prioritization_boosted)
 
-            # Solar returns and the inverter exports again: boost back to 90%
+            # Solar returns and the inverter exports again for the hold time: boost back to 90%
             self.app.inverter.set_time_of_use_target_soc.reset_mock()
-            with patch("time.time", return_value=2400.0):
-                self.app._process_charge_prioritization(self._selling_data(grid_power=-1500))
+            self._process_held(self._selling_data(grid_power=-1500), start=2400.0)
             self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 90)
             self.assertTrue(self.app._prioritization_boosted)
+
+    def test_brief_export_spike_does_not_boost(self):
+        """Exporting above the trigger for less than the hold time leaves the target alone."""
+        with patch("datetime.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 6, 1, 13, 35)
+            self.app.schedule_panel.get_active_schedule.return_value = {"max_charge_amps": 200}
+
+            self._process_held(self._selling_data(grid_power=-3000), seconds=299)
+
+            self.app.inverter.set_time_of_use_target_soc.assert_not_called()
+            self.assertFalse(self.app._prioritization_boosted)
+            self.assertEqual(self.app._prioritization_export_since, 1000.0)
+
+    def test_export_timer_restarts_when_export_stops(self):
+        """A dip below the trigger restarts the hold: the export has to last the full time again."""
+        with patch("datetime.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 6, 1, 13, 35)
+            self.app.schedule_panel.get_active_schedule.return_value = {"max_charge_amps": 200}
+
+            with patch("time.time", return_value=1000.0):
+                self.app._process_charge_prioritization(self._selling_data(grid_power=-3000))
+            with patch("time.time", return_value=1200.0):
+                self.app._process_charge_prioritization(self._selling_data(grid_power=-200))  # Export dips
+            self.assertIsNone(self.app._prioritization_export_since)
+            with patch("time.time", return_value=1250.0):
+                self.app._process_charge_prioritization(self._selling_data(grid_power=-3000))
+            with patch("time.time", return_value=1400.0):  # 400s after the first reading, 150s after the restart
+                self.app._process_charge_prioritization(self._selling_data(grid_power=-3000))
+            self.app.inverter.set_time_of_use_target_soc.assert_not_called()
+
+            with patch("time.time", return_value=1550.0):  # 300s after the restart
+                self.app._process_charge_prioritization(self._selling_data(grid_power=-3000))
+            self.app.inverter.set_time_of_use_target_soc.assert_called_once_with(2, 90)
+            self.assertIsNone(self.app._prioritization_export_since)
+
+    def test_export_timer_restarts_when_heavy_charging_request_ends(self):
+        """The heavy-charging request is part of the held condition, not only the export."""
+        with patch("datetime.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 6, 1, 13, 35)
+            self.app._sunset_active = True
+            self.app._sunset_boost_amps = 40
+
+            with patch("time.time", return_value=1000.0):
+                self.app._process_charge_prioritization(self._selling_data())
+            self.app._sunset_boost_amps = 0  # Sunset stops asking for more charge
+            with patch("time.time", return_value=1200.0):
+                self.app._process_charge_prioritization(self._selling_data())
+            self.app._sunset_boost_amps = 40
+            with patch("time.time", return_value=1301.0):
+                self.app._process_charge_prioritization(self._selling_data())
+
+            self.app.inverter.set_time_of_use_target_soc.assert_not_called()
+            self.assertEqual(self.app._prioritization_export_since, 1301.0)
 
     def test_restart_adopts_slot_left_at_boost_target_and_falls_back(self):
         """After a crash/reboot the inverter still has slot 2 at 90%: adopt it so grid pull still lowers it."""

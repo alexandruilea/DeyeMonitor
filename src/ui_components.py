@@ -1066,9 +1066,9 @@ class ChargePrioritizationPanel(ctk.CTkFrame):
         
         ctk.CTkLabel(settings_frame, text="W", font=("Roboto", 10)).grid(row=0, column=11, padx=(0, 10), pady=8)
 
-        # Grid Pull Duration (s)
+        # Hold time (s): export must last this long before boosting, grid pull before falling back
         ctk.CTkLabel(
-            settings_frame, text="Pull Duration:",
+            settings_frame, text="Hold Time:",
             font=("Roboto", 10),
             text_color="#95A5A6"
         ).grid(row=0, column=12, padx=5, pady=8, sticky="w")
@@ -1131,7 +1131,9 @@ class ChargePrioritizationPanel(ctk.CTkFrame):
                 "grid_pull_duration_sec": charge_prioritization_config.grid_pull_duration_sec,
             }
 
-    def update_status(self, is_boosting: bool, slot_idx: Optional[int] = None, current_target: Optional[int] = None, pull_timer_sec: Optional[int] = None) -> None:
+    def update_status(self, is_boosting: bool, slot_idx: Optional[int] = None, current_target: Optional[int] = None,
+                      pull_timer_sec: Optional[int] = None, export_timer_sec: Optional[int] = None,
+                      hold_sec: Optional[int] = None) -> None:
         """Update status label with current prioritization state."""
         if not self.enabled_var.get():
             self.lbl_status.configure(text="Disabled", text_color="gray")
@@ -1140,15 +1142,17 @@ class ChargePrioritizationPanel(ctk.CTkFrame):
         slot_str = f"Slot {slot_idx + 1}" if slot_idx is not None else "No slot"
         target_str = f"Target {current_target}%" if current_target is not None else ""
         
+        hold_str = f"/{hold_sec}s" if hold_sec else "s"
         if is_boosting:
-            pull_str = f" (Grid Pull {pull_timer_sec}s)" if pull_timer_sec else ""
+            pull_str = f" (Grid Pull {pull_timer_sec}{hold_str})" if pull_timer_sec else ""
             self.lbl_status.configure(
                 text=f"BOOSTING: {slot_str} \u2192 {target_str}{pull_str}",
                 text_color="#2ECC71"
             )
         else:
+            export_str = f" Export {export_timer_sec}{hold_str}" if export_timer_sec else ""
             self.lbl_status.configure(
-                text=f"Standby: {slot_str} ({target_str})",
+                text=f"Standby: {slot_str} ({target_str}){export_str}",
                 text_color="#3498DB"
             )
 

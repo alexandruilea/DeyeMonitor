@@ -222,7 +222,7 @@ class ChargePrioritizationConfig:
     normal_target_soc: int = field(default_factory=lambda: int(os.getenv("CHARGE_PRIORITIZATION_NORMAL_TARGET_SOC", "20")))  # Target SOC when falling back (%)
     sell_trigger_power: int = field(default_factory=lambda: int(os.getenv("CHARGE_PRIORITIZATION_SELL_TRIGGER_W", "1000")))  # Export watts to trigger boost (e.g. 1000W)
     grid_pull_threshold_w: int = field(default_factory=lambda: int(os.getenv("CHARGE_PRIORITIZATION_GRID_PULL_W", "500")))  # Grid pull import threshold (W)
-    grid_pull_duration_sec: int = field(default_factory=lambda: int(os.getenv("CHARGE_PRIORITIZATION_GRID_PULL_SEC", "300")))  # Seconds of high grid pull before fallback (5 min)
+    grid_pull_duration_sec: int = field(default_factory=lambda: int(os.getenv("CHARGE_PRIORITIZATION_GRID_PULL_SEC", "300")))  # Hold time (s): export before boosting, high grid pull before fallback (5 min)
 
 
 @dataclass

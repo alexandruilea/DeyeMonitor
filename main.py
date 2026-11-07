@@ -200,6 +200,7 @@ class DeyeApp(ctk.CTk):
         # Charge prioritization state (Time of Use target SOC)
         self._prioritization_boosted = False  # Whether target SOC is currently raised to boost_target_soc
         self._prioritization_grid_pull_since: float | None = None  # When grid pull continuously exceeded threshold
+        self._prioritization_export_since: float | None = None  # When export + heavy charging request continuously held
         self._tou_slots_cache: list[dict] | None = None  # Cached TOU slots from inverter
         self._last_tou_read_time: float = 0.0  # Last time TOU slots were read from inverter
         self._last_tou_target_soc: int | None = None  # Track last written target SOC to avoid redundant writes
@@ -998,6 +999,7 @@ class DeyeApp(ctk.CTk):
         if not self.prioritization_panel.is_enabled():
             print("[PRIORITIZATION] Disabled via UI")
             self._prioritization_grid_pull_since = None
+            self._prioritization_export_since = None
             if self._prioritization_boosted:
                 # Fallback to normal target SOC on active slot if boosted
                 settings = self.prioritization_panel.get_settings()
@@ -2073,7 +2075,8 @@ class DeyeApp(ctk.CTk):
         """
         Prioritise charging over selling when other algorithms request heavy charging.
         
-        Trigger condition to boost:
+        Trigger condition to boost (both held for grid_pull_duration_sec, the same hold
+        time as the fallback, so a brief export spike does not flip the target):
         - Prioritization panel enabled
         - Inverter has power to sell (grid_power < -sell_trigger_power, e.g. exporting > 1000W)
         - Heavy charging is requested, by a boost algorithm or by the schedule itself:
@@ -2118,6 +2121,7 @@ class DeyeApp(ctk.CTk):
             # Reset state for the new slot
             self._prioritization_boosted = False
             self._prioritization_grid_pull_since = None
+            self._prioritization_export_since = None
 
         self._last_prioritization_slot_idx = slot_idx
 
@@ -2155,19 +2159,31 @@ class DeyeApp(ctk.CTk):
         else:
             self._prioritization_grid_pull_since = None
 
+        # Same hold time on the boost side: export (with heavy charging requested) must last
+        # grid_pull_duration_sec too, so short export spikes do not flip the target back and forth
+        export_timer_sec = None
+        if has_power_to_sell and heavy_charging_requested and not self._prioritization_boosted:
+            if self._prioritization_export_since is None:
+                self._prioritization_export_since = now_ts
+            export_timer_sec = int(now_ts - self._prioritization_export_since)
+        else:
+            self._prioritization_export_since = None
+
         # State machine: Boost or Fallback
         if not self._prioritization_boosted:
-            if has_power_to_sell and heavy_charging_requested:
+            if export_timer_sec is not None and export_timer_sec >= grid_pull_duration_sec:
                 # Trigger boost: raise target SOC to boost_target
                 reg = 166 + slot_idx
                 print(f"[PRIORITIZATION] Raising TOU slot {slot_idx + 1} (reg {reg}) target SOC to {boost_target}% "
-                      f"(exporting {-data.grid_power}W > {sell_trigger_w}W, heavy charging requested: "
+                      f"(exporting {-data.grid_power}W > {sell_trigger_w}W for {export_timer_sec}s, heavy charging requested: "
                       f"prot={self._protection_boost_amps}A, sunset={self._sunset_boost_amps}A, "
                       f"max charge={base_charge}A/{deye_config.max_charge_amps_limit}A)")
                 if self._write_tou_target_soc(slot_idx, boost_target):
                     self._prioritization_boosted = True
                     self._last_tou_target_soc = boost_target
-                    self._log_error(f"Charge Prioritization: Raised Slot {slot_idx + 1} target SOC to {boost_target}%")
+                    self._prioritization_export_since = None
+                    self._log_error(f"Charge Prioritization: Raised Slot {slot_idx + 1} target SOC to {boost_target}% "
+                                    f"(exporting > {sell_trigger_w}W for {export_timer_sec}s)")
         else:
             # Currently boosted: check if we should fall back
             should_fallback = False
@@ -2192,8 +2208,9 @@ class DeyeApp(ctk.CTk):
         if current_target is None and self._tou_slots_cache and slot_idx < len(self._tou_slots_cache):
             current_target = self._tou_slots_cache[slot_idx].get("target_soc")
 
-        self.after(0, lambda b=self._prioritization_boosted, s=slot_idx, t=current_target, p=pull_timer_sec:
-                   self.prioritization_panel.update_status(b, s, t, p))
+        self.after(0, lambda b=self._prioritization_boosted, s=slot_idx, t=current_target, p=pull_timer_sec,
+                   e=export_timer_sec, h=grid_pull_duration_sec:
+                   self.prioritization_panel.update_status(b, s, t, p, export_timer_sec=e, hold_sec=h))
 
     def _is_ev_offline(self) -> bool:
         """Check if EV charger is enabled and configured but currently offline."""
