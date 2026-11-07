@@ -107,6 +107,10 @@ class DeyeApp(ctk.CTk):
         if icon_path.exists():
             self.after(200, lambda: self.iconbitmap(str(icon_path)))
         
+        # Track if main loop has started (for safe error logging from threads).
+        # Set before any manager starts its thread: they can log right away.
+        self._main_loop_started = False
+
         # Initialize hardware managers
         self.inverter = DeyeInverter()
         self._inverter_lock = threading.Lock()  # Serialize modbus access across threads
@@ -123,8 +127,12 @@ class DeyeApp(ctk.CTk):
                 name=inverter_fan_config.name, priority=1, power=0,
             )
             self.fan_tapo = TapoManager(error_callback=self._log_error, configs=[fan_cfg])
-            # Cooling is safety-related: keep retrying (60s max backoff) instead of giving up
-            self.fan_tapo.get_outlet(1)._max_retries = 10**9
+            # A plug allows one session at a time: two outlets on one IP keep logging each other out
+            for outlet in self.tapo.get_all_outlets().values():
+                if outlet.config.ip == fan_cfg.ip:
+                    self._log_error(f"[WARNING] '{fan_cfg.name}' and outlet '{outlet.config.name}' both use "
+                                    f"{fan_cfg.ip}: they will keep logging each other out of the plug. "
+                                    f"Check INVERTER_FAN_IP and the OUTLET_N_IP settings.")
 
         # MG cars (SAIC iSmart cloud), one manager per MG_CAR_N account
         self.mg_cars = {cfg.car_id: MGCarManager(cfg, error_callback=self._log_error) for cfg in mg_car_configs}
@@ -206,9 +214,6 @@ class DeyeApp(ctk.CTk):
         )
         self._weather_enabled = sunset_config.weather_enabled
         
-        # Track if main loop has started (for safe error logging from threads)
-        self._main_loop_started = False
-
         # EVSE status for top status display
         self._evse_offline = False
         
@@ -544,10 +549,11 @@ class DeyeApp(ctk.CTk):
         """Log error message to UI and log file (called from background thread)."""
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         try:
-            if self._main_loop_started:
+            # getattr: background threads can log before __init__ has finished
+            if getattr(self, "_main_loop_started", False):
                 self.after(0, lambda: self.log_viewer.add_log(message))
-        except RuntimeError:
-            pass
+        except Exception:
+            pass  # The UI log is best-effort; the message is already in the log file
 
     def _open_battery_stats(self) -> None:
         """Open the Battery Statistics dialog with live BMS data."""

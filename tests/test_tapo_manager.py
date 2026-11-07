@@ -20,9 +20,14 @@ class FakeOutlet(OutletDevice):
         super().__init__(OutletConfig(outlet_id=1, ip="192.0.2.1", username="u", password="p", name="Fan",
                                       priority=1, power=0))
         self.logins = 0
+        self.connect_attempts = 0
         self.fail_next = None  # Exception text raised by the next state read
+        self.fail_connect = None  # Exception text raised by every login while set
 
     async def connect(self) -> None:
+        self.connect_attempts += 1
+        if self.fail_connect:
+            raise Exception(self.fail_connect)
         self.logins += 1
         self.device = object()
         self._connected_at = time.monotonic()
@@ -100,6 +105,66 @@ class TestSessionLoss(unittest.TestCase):
         self.assertEqual(self.outlet._retry_count, 1)
         self.assertTrue(self.log[0].startswith("[Fan] Offline:"))
         self.assertEqual(self.outlet._reconnect_after, 0.0)
+
+    def test_unreachable_plug_keeps_retrying_and_comes_back(self):
+        # Used to give up for good after ~3 failed logins (polls skipped during the delay
+        # counted as retries), leaving the outlet "offline" while it worked in the Tapo app
+        self.outlet.fail_connect = 'Tapo(HttpError { status_code: 400, description: "Handshake2 failed" })'
+        for _ in range(30):
+            self.outlet._next_attempt = 0  # Retry delay over
+            self.poll()
+        self.assertEqual(self.outlet.connect_attempts, 30)
+        self.assertFalse(self.outlet.is_connected)
+
+        self.outlet.fail_connect = None
+        self.outlet._next_attempt = 0
+        self.poll()
+        self.assertTrue(self.outlet.is_connected)
+        self.assertEqual(self.outlet._retry_count, 0)
+        self.assertEqual(len(self.log), 2)
+        self.assertTrue(self.log[0].startswith("[Fan] Offline:"))
+        self.assertEqual(self.log[1], "[Fan] Back online")
+
+    def test_no_login_during_retry_delay(self):
+        self.outlet.fail_connect = "Http(reqwest::Error { kind: Request, source: ConnectError })"
+        self.poll()
+        for _ in range(5):
+            self.poll()
+        self.assertEqual(self.outlet.connect_attempts, 1)
+        self.assertEqual(self.outlet._retry_count, 1)  # Skipped polls are not failures
+        self.assertGreater(self.outlet._next_attempt, time.monotonic())
+
+    def test_retry_delay_is_capped(self):
+        self.outlet.fail_connect = "Http(reqwest::Error { kind: Request, source: ConnectError })"
+        for _ in range(12):
+            self.outlet._next_attempt = 0
+            self.poll()
+        delay = self.outlet._next_attempt - time.monotonic()
+        self.assertLessEqual(delay, tapo_manager.RETRY_MAX_SECONDS)
+        self.assertGreater(delay, tapo_manager.RETRY_MAX_SECONDS - 5)
+
+    def test_manual_toggle_retries_at_once(self):
+        self.manager.outlets[1] = self.outlet
+        self.outlet.fail_connect = "Http(reqwest::Error { kind: Request, source: ConnectError })"
+        self.poll()
+        self.manager.toggle(1)
+        self.assertEqual(self.outlet._next_attempt, 0.0)
+        self.assertTrue(self.outlet.target_state)
+
+    def test_failing_log_callback_does_not_break_polling(self):
+        # The UI logger raised before the window finished building, which killed the
+        # polling thread: every outlet of that manager stayed offline until a restart
+        def broken_log(_message):
+            raise AttributeError("'_tkinter.tkapp' object has no attribute '_main_loop_started'")
+        self.manager.error_callback = broken_log
+        self.outlet.fail_connect = 'Tapo(HttpError { status_code: 400, description: "Handshake2 failed" })'
+        self.poll()  # Must not raise
+        self.assertEqual(self.outlet._retry_count, 1)
+
+        self.outlet.fail_connect = None
+        self.outlet._next_attempt = 0
+        self.poll()
+        self.assertTrue(self.outlet.is_connected)
 
     def test_backoff_lengths(self):
         self.assertGreaterEqual(tapo_manager.CONTENTION_BACKOFF_SECONDS, 30)
