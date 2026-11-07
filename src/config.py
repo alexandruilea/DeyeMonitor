@@ -4,6 +4,7 @@ Loads hardware settings from .env file and provides default EMS parameters.
 """
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,18 +113,26 @@ class OutletConfig:
     restart_delay_minutes: int = 30  # Minutes to wait before auto-restarting after turn-off
 
 
+_OUTLET_KEY = re.compile(r"^OUTLET_(\d+)_")
+
+
 def load_outlet_configs() -> List[OutletConfig]:
-    """Load all outlet configurations from environment variables."""
+    """Load all outlet configurations from environment variables.
+
+    Every OUTLET_N_* block is read. A block with an empty OUTLET_N_IP is an unused
+    outlet: it is skipped without hiding the blocks numbered after it. Each outlet
+    keeps N as its id, so the UI and "Save .env" use the block's own number.
+    """
     outlets = []
-    i = 1
-    
-    while True:
+    numbers = sorted({int(m.group(1)) for key in os.environ if (m := _OUTLET_KEY.match(key))})
+
+    for i in numbers:
         prefix = f"OUTLET_{i}_"
-        ip = os.getenv(f"{prefix}IP")
-        
+        ip = (os.getenv(f"{prefix}IP") or "").strip()
+
         if not ip:
-            break
-        
+            continue  # Unused outlet (IP left empty)
+
         # Required fields
         username = os.getenv(f"{prefix}USER", "")
         password = os.getenv(f"{prefix}PASS", "")
@@ -183,8 +192,6 @@ def load_outlet_configs() -> List[OutletConfig]:
             restart_delay_enabled=restart_delay_enabled,
             restart_delay_minutes=restart_delay_minutes
         ))
-        
-        i += 1
     
     # Sort by priority (lower number = higher priority)
     outlets.sort(key=lambda x: x.priority)
