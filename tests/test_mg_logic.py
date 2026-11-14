@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 
 from src.mg_logic import (
     ACHIEVE_CHECK, ACHIEVE_MAX, AchieveStep, CarStatus, MGAction, MGRequest, MGSchedule, SeatSupport, Step,
-    StepKind, achieve_restart_request, achieve_step, format_days, is_remote_block, new_achieve_job, next_run,
+    StepKind, achieve_restart_request, achieve_step, describe_error, describe_schedule, format_days,
+    is_remote_block, new_achieve_job, next_run,
     note_cabin_reading, parse_days, parse_time, pick_vin, plan_commands, schedule_due, seat_support_from_config, temperature_index,
     verify_result,
 )
@@ -283,6 +284,38 @@ class TestParsing(unittest.TestCase):
             pick_vin(["LSJA1111", "LSJB3926"])
         with self.assertRaises(ValueError):
             pick_vin(["LSJA1111"], "9999")
+
+
+class TestDescriptions(unittest.TestCase):
+    def test_schedule_on(self):
+        schedule = MGSchedule(enabled=True, hour=8, minute=45, days=frozenset(range(5)),
+                              action=MGAction.CLIMATE_BOTH_SEATS)
+        self.assertEqual(describe_schedule(schedule, 22), "Mon,Tue,Wed,Thu,Fri at 08:45, Climate + Both Seats at 22°C")
+
+    def test_schedule_windshield_and_rear(self):
+        schedule = MGSchedule(enabled=True, hour=6, minute=50, days=frozenset({0, 2}),
+                              windshield=True, rear_defrost=True)
+        self.assertEqual(describe_schedule(schedule, 22),
+                         "Mon,Wed at 06:50, Climate (windshield defrost) + rear defroster")
+
+    def test_schedule_off_states(self):
+        self.assertEqual(describe_schedule(MGSchedule(enabled=False), 22), "off")
+        self.assertEqual(describe_schedule(None, 22), "off (invalid time in the panel)")
+        self.assertIn("no days selected", describe_schedule(MGSchedule(enabled=True, days=frozenset()), 22))
+
+    def test_error_shows_hidden_cause(self):
+        # The SAIC client wraps network errors and timeouts like this
+        try:
+            try:
+                raise TimeoutError()
+            except TimeoutError as cause:
+                raise RuntimeError("API call GET /vehicle/status failed unexpectedly") from cause
+        except RuntimeError as e:
+            self.assertEqual(describe_error(e),
+                             "API call GET /vehicle/status failed unexpectedly [TimeoutError: no details]")
+
+    def test_error_without_cause_unchanged(self):
+        self.assertEqual(describe_error(ValueError("bad value")), "bad value")
 
 
 if __name__ == "__main__":

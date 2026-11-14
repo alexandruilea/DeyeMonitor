@@ -28,8 +28,9 @@ from src.config import MGCarConfig
 from src.mg_logic import (
     ACHIEVE_CHECK, ACHIEVE_MAX, ACHIEVE_MAX_ERRORS, ACHIEVE_RECHECK, ESSENTIAL_STEPS, REMOTE_BLOCK_HINT,
     AchieveJob, AchieveStep, CarStatus, MGAction, MGRequest, MGSchedule, SeatSupport, Step, StepKind,
-    achieve_restart_request, achieve_step, describe_request, is_remote_block, mask_vin, new_achieve_job,
-    next_run, note_cabin_reading, pick_vin, plan_commands, schedule_due, seat_support_from_config, verify_result,
+    achieve_restart_request, achieve_step, describe_error, describe_request, describe_schedule, is_remote_block,
+    mask_vin, new_achieve_job, next_run, note_cabin_reading, pick_vin, plan_commands, schedule_due,
+    seat_support_from_config, verify_result,
 )
 
 RELOGIN_BACKOFF = timedelta(minutes=30)  # After the phone took the session, before a background login
@@ -37,6 +38,9 @@ STATUS_REFRESH = timedelta(minutes=10)   # Cached status poll (doesn't wake the 
 COMMAND_GAP_SECONDS = 5                  # Pause between commands so the car isn't asked while still busy
 READBACK_DELAY_SECONDS = 15              # Let the car apply the last command before reading it back
 LOOP_INTERVAL_SECONDS = 20
+# The client's default 5s read timeout is short for SAIC's servers: slow replies came back as
+# "API call ... failed unexpectedly" (return code 500) and ended status reads and cabin checks
+SAIC_READ_TIMEOUT_SECONDS = 20.0
 
 
 @dataclass
@@ -97,6 +101,8 @@ class MGCarManager:
         self._running = True
         self._loop = asyncio.new_event_loop()
         self._api_lock = asyncio.Lock()  # One SAIC conversation at a time (actions and refreshes)
+        # Logged so a day without a scheduled run can be explained from the log
+        self._log(f"Schedule: {describe_schedule(self._schedule, self._schedule_temp)}")
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
@@ -114,8 +120,11 @@ class MGCarManager:
     def set_schedule(self, schedule: Optional[MGSchedule], temperature: int) -> None:
         """Replace the schedule (None = disabled) and the temperature it uses."""
         with self._state_lock:
+            changed = (schedule, temperature) != (self._schedule, self._schedule_temp)
             self._schedule = schedule
             self._schedule_temp = temperature
+        if changed:
+            self._log(f"Schedule changed: {describe_schedule(schedule, temperature)}")
 
     def set_achieve_temperature(self, enabled: bool, max_restarts: int) -> None:
         """Turn the achieve-temperature restarts on or off (off cancels a running one) and set
@@ -201,6 +210,7 @@ class MGCarManager:
             self._api = SaicApi(SaicApiConfiguration.mg_eu(
                 self.config.username, self.config.password,
                 username_is_email=phone is None, phone_country_code=phone,
+                read_timeout=SAIC_READ_TIMEOUT_SECONDS,
             ))
         try:
             await self._api.login()
@@ -259,7 +269,7 @@ class MGCarManager:
             except SaicLogoutException:
                 self._on_logged_out()
             except Exception as e:
-                message = f"Status refresh failed: {e}"
+                message = f"Status refresh failed: {describe_error(e)}"
                 if message != self._last_refresh_error:  # Log each new problem once
                     self._last_refresh_error = message
                     self._log(message)
@@ -324,7 +334,7 @@ class MGCarManager:
                 self._remote_blocked = True
                 self._set_result(False, f"{label} refused: {REMOTE_BLOCK_HINT}")
             else:
-                self._set_result(False, f"{label} failed: {e}")
+                self._set_result(False, f"{label} failed: {describe_error(e)}")
         finally:
             self._set_busy("")
         return False
@@ -437,7 +447,7 @@ class MGCarManager:
             if is_remote_block(str(e)):
                 self._end_achieve(job, False, f"restart refused - {REMOTE_BLOCK_HINT}")
             else:
-                self._achieve_error(job, f"check failed ({e})")
+                self._achieve_error(job, f"check failed ({describe_error(e)})")
         finally:
             self._set_busy("")
 

@@ -303,6 +303,19 @@ def achieve_restart_request(job: AchieveJob) -> MGRequest:
     return MGRequest(job.request.action, job.request.temperature)
 
 
+def describe_error(error: BaseException) -> str:
+    """The error text plus its underlying cause.
+
+    The SAIC client reports network errors and timeouts as "API call ... failed
+    unexpectedly" (return code 500) and keeps the real error in __cause__.
+    """
+    text = str(error)
+    cause = error.__cause__
+    if cause is not None:
+        text += f" [{type(cause).__name__}: {str(cause) or 'no details'}]"
+    return text
+
+
 def is_remote_block(error_text: str) -> bool:
     """Whether a SAIC error is the car's "too frequent operations, use the physical key" refusal."""
     text = error_text.lower()
@@ -364,6 +377,18 @@ def parse_days(raw: str) -> FrozenSet[int]:
 
 def format_days(days: FrozenSet[int]) -> str:
     return ",".join(WEEKDAYS[d] for d in sorted(days))
+
+
+def describe_schedule(schedule: Optional[MGSchedule], temperature: int) -> str:
+    """One log line: when the schedule runs and what it sends."""
+    if schedule is None:
+        return "off (invalid time in the panel)"
+    if not schedule.enabled:
+        return "off"
+    if not schedule.days:
+        return "on, but no days selected - it never runs"
+    request = MGRequest(schedule.action, temperature, schedule.windshield, schedule.rear_defrost)
+    return f"{format_days(schedule.days)} at {schedule.hour:02d}:{schedule.minute:02d}, {describe_request(request)}"
 
 
 def schedule_due(schedule: MGSchedule, now: datetime, last_success: Optional[date],

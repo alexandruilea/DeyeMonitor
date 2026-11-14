@@ -245,6 +245,47 @@ class TestMGCarManager(unittest.TestCase):
         asyncio.run(manager._run_schedule(manager._due_schedule_request(now), now))
         self.assertIsNotNone(manager._due_schedule_request(now + timedelta(minutes=4)))
 
+    def test_schedule_logged_at_startup_and_on_change(self):
+        # A day without a scheduled run must be explainable from the log
+        log = []
+        schedule = MGSchedule(enabled=True, hour=8, minute=45, action=MGAction.CLIMATE_BOTH_SEATS)
+        manager = OfflineManager(MGCarConfig(car_id=1, name="S9", username="u", password="p", schedule=schedule),
+                                 error_callback=log.append)
+        self.assertEqual(log, ["[S9] Schedule: Mon,Tue,Wed,Thu,Fri at 08:45, Climate + Both Seats at 22°C"])
+
+        manager.set_schedule(schedule, 22)  # Unchanged (every field edit calls this): no log
+        self.assertEqual(len(log), 1)
+
+        manager.set_schedule(MGSchedule(enabled=False, hour=8, minute=45), 22)
+        manager.set_schedule(None, 22)  # Invalid time typed in the panel
+        self.assertEqual(log[1:], ["[S9] Schedule changed: off",
+                                   "[S9] Schedule changed: off (invalid time in the panel)"])
+
+    def test_failure_names_the_hidden_cause(self):
+        api = FakeApi(locked=True)
+        manager = make_manager(api)
+        error = SaicApiException("API call GET /vehicle/status failed unexpectedly", return_code=500)
+        error.__cause__ = TimeoutError("read timed out")
+        api.fail["status"] = error
+        self.assertFalse(self.run_action(manager, MGRequest(MGAction.CLIMATE, 18)))
+        self.assertIn("[TimeoutError: read timed out]", manager.get_state().result)
+
+    def test_login_uses_longer_read_timeout(self):
+        configs = []
+        original = mg_car.SaicApi
+
+        def capture(configuration):
+            configs.append(configuration)
+            return FakeApi()
+        mg_car.SaicApi = capture
+        try:
+            manager = OfflineManager(MGCarConfig(car_id=1, name="S9", username="u@example.com", password="p"))
+            asyncio.run(manager._ensure_session(automatic=False))
+        finally:
+            mg_car.SaicApi = original
+        self.assertEqual(configs[0].read_timeout, mg_car.SAIC_READ_TIMEOUT_SECONDS)
+        self.assertGreater(mg_car.SAIC_READ_TIMEOUT_SECONDS, 5)
+
 
 class TestAchieveTemperature(unittest.TestCase):
     def setUp(self):
